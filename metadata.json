@@ -1,0 +1,5 @@
+{
+  "name": "Desboard",
+  "description": "AI-augmented dashboard for designers to manage files, projects, and clients. AI features are powered by the Anthropic Claude API via a Node/Express backend.",
+  "requestFramePermissions": []
+}

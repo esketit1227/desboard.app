@@ -1,0 +1,17 @@
+node_modules/
+build/
+dist/
+coverage/
+.DS_Store
+*.log
+.env*
+!.env.example
+
+# Local SQLite database (regenerated + reseeded automatically on first run)
+*.db
+*.db-journal
+*.db-wal
+*.db-shm
+
+# Local Claude Code settings
+.claude/settings.local.json
