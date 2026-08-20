@@ -18,7 +18,7 @@ export function SuggestionChips({
           key={s}
           type="button"
           onClick={() => onPick(s)}
-          className="text-left text-[11px] text-[#DBCBC2]/70 bg-white/[0.04] border border-white/10 rounded-full px-3.5 py-2 hover:border-[#D85E25]/60 hover:text-[#EBE6DD] focus-visible:outline focus-visible:outline-2 focus-visible:outline-[#D85E25] transition-colors"
+          className="text-left text-[12.5px] text-ink/70 bg-surface border border-line rounded-full px-3.5 py-2 hover:border-primary/50 hover:text-ink focus-visible:outline focus-visible:outline-2 focus-visible:outline-primary transition-colors"
         >
           {s}
         </button>

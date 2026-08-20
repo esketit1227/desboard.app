@@ -15,3 +15,9 @@ coverage/
 
 # Local Claude Code settings
 .claude/settings.local.json
+
+# Demo-licensed font files (personal use) — do not publish
+public/fonts/
+
+# Locally stored upload bytes
+uploads/

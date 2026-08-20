@@ -104,8 +104,8 @@ export async function streamAssistant(messages: AssistantMessage[], h: StreamHan
   }
 }
 
-/** Fire-and-forget usage metric (question volume / suggestion click-through). */
-export function logAssistantEvent(event: "ask" | "suggestion_click", detail?: string): void {
+/** Fire-and-forget usage metric (question volume / suggestion click-through / home-screen interactions). */
+export function logAssistantEvent(event: "ask" | "suggestion_click" | "tab_change" | "rail_action", detail?: string): void {
   fetch("/api/assistant/metrics", {
     method: "POST",
     headers: { "Content-Type": "application/json" },

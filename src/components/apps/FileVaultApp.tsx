@@ -22,6 +22,7 @@ import {
   Check,
   Moon,
   Cloud,
+  Database,
   Figma,
   PenTool,
   CheckCircle,
@@ -31,8 +32,9 @@ import {
   ArrowRight,
 } from "lucide-react";
 import { motion, AnimatePresence } from "motion/react";
-import type { VaultFile, ChatMessage } from "../../types";
+import type { VaultFile, ChatMessage, ProjectFull, Tag, FileStatus } from "../../types";
 import { api } from "../../lib/api";
+import { previewableKind, contentUrl } from "../../lib/filePreview";
 
 /**
  * File Vault window — grid/list browser, AI upload tagging, AI semantic search,
@@ -43,10 +45,24 @@ import { api } from "../../lib/api";
 export function FileVaultApp({
   showToast,
   initialFileId = null,
+  initialProjectFilter = null,
+  initialFocusSearch = false,
+  highContrast,
+  onHighContrastChange,
+  onOpenConnections,
 }: {
   showToast: (msg: string) => void;
   /** Open with this file pre-selected in the inspector (e.g. from an assistant citation). */
   initialFileId?: string | null;
+  /** Open pre-filtered to a project (e.g. a project's Files & Assets tile). */
+  initialProjectFilter?: number | null;
+  /** Focus the search field on mount (e.g. from the sidebar's Search shortcut). */
+  initialFocusSearch?: boolean;
+  /** App-wide preference (also editable from Settings) — lifted so it survives switching screens. */
+  highContrast: boolean;
+  onHighContrastChange: (value: boolean) => void;
+  /** Deep-link to the Connections screen to actually connect/disconnect a provider. */
+  onOpenConnections?: () => void;
 }) {
   const [filesList, setFilesList] = useState<VaultFile[]>([]);
   const [viewMode, setViewMode] = useState<"grid" | "list">("grid");
@@ -62,21 +78,54 @@ export function FileVaultApp({
   const [dragActive, setDragActive] = useState(false);
   const [isAddingTag, setIsAddingTag] = useState(false);
   const [newTagVal, setNewTagVal] = useState("");
-  const [highContrast, setHighContrast] = useState(false);
   const [linkedDrive, setLinkedDrive] = useState(false);
   const [linkedDropbox, setLinkedDropbox] = useState(false);
-  const [uploadDestination, setUploadDestination] = useState<"drive" | "dropbox" | "desboard">("desboard");
+  const [linkedOneDrive, setLinkedOneDrive] = useState(false);
+  const [uploadDestination, setUploadDestination] = useState<"drive" | "dropbox" | "onedrive" | "desboard">("desboard");
+
+  // Real connection status (Google Drive / Dropbox / OneDrive), for the
+  // upload-destination picker and the sidebar's Cloud Storage panel — see
+  // ConnectionsApp for the actual connect/disconnect flow, which lives on its
+  // own screen.
+  useEffect(() => {
+    api.getOAuthStatus("google").then((s) => setLinkedDrive(s.connected)).catch(() => {});
+    api.getOAuthStatus("dropbox").then((s) => setLinkedDropbox(s.connected)).catch(() => {});
+    api.getOAuthStatus("onedrive").then((s) => setLinkedOneDrive(s.connected)).catch(() => {});
+  }, []);
   const [previewingFile, setPreviewingFile] = useState<VaultFile | null>(null);
   const [selectedFilterProject, setSelectedFilterProject] = useState<number | null>(null);
   const [dragHoverProject, setDragHoverProject] = useState<number | null>(null);
 
-  // Upload & AI tagging state
-  const [uploadingFile, setUploadingFile] = useState<{ name: string; size: string; extension: string } | null>(null);
+  // Real sidebar data (projects/tags) + the filters they drive.
+  const [projects, setProjects] = useState<ProjectFull[]>([]);
+  const [tags, setTags] = useState<Tag[]>([]);
+  const [selectedTagFilter, setSelectedTagFilter] = useState<string | null>(null);
+  const [sidebarView, setSidebarView] = useState<"all" | "recent" | "shared">("all");
+  const [statusFilter, setStatusFilter] = useState<FileStatus | null>(null);
+  const [showFilterMenu, setShowFilterMenu] = useState(false);
+  const [isAddingAccess, setIsAddingAccess] = useState(false);
+  const [newAccessVal, setNewAccessVal] = useState("");
+  const [editingLink, setEditingLink] = useState<"project" | "client" | null>(null);
+
+  // Upload & AI tagging state. `content` holds the base64 bytes until confirm,
+  // so the upload stores a real file (previews + downloads), not just metadata.
+  const [uploadingFile, setUploadingFile] = useState<{
+    name: string;
+    size: string;
+    extension: string;
+    content: string;
+    mime: string;
+  } | null>(null);
   const [isAnalyzing, setIsAnalyzing] = useState(false);
   const [suggestedTags, setSuggestedTags] = useState<string[]>([]);
   const [uploadSummary, setUploadSummary] = useState<string | null>(null);
   const [selectedSuggestions, setSelectedSuggestions] = useState<string[]>([]);
   const fileInputRef = useRef<HTMLInputElement>(null);
+  const searchInputRef = useRef<HTMLInputElement>(null);
+
+  useEffect(() => {
+    if (initialFocusSearch) searchInputRef.current?.focus();
+  }, [initialFocusSearch]);
 
   // Version comparison state
   const [selectedVersionsToCompare, setSelectedVersionsToCompare] = useState<string[]>([]);
@@ -85,6 +134,11 @@ export function FileVaultApp({
   // Load files from the SQLite-backed API so they survive a refresh.
   useEffect(() => {
     api.getFiles().then(setFilesList).catch((e) => console.error("Failed to load files", e));
+  }, []);
+
+  useEffect(() => {
+    api.getProjects().then(setProjects).catch((e) => console.error("Failed to load projects", e));
+    api.getTags().then(setTags).catch((e) => console.error("Failed to load tags", e));
   }, []);
 
   // Deep-open a specific file (assistant citation chips) once files are loaded.
@@ -96,6 +150,11 @@ export function FileVaultApp({
       setActiveTab("details");
     }
   }, [initialFileId, filesList]);
+
+  // Pre-filter to a project when opened from its Files & Assets tile.
+  useEffect(() => {
+    if (initialProjectFilter != null) setSelectedFilterProject(initialProjectFilter);
+  }, [initialProjectFilter]);
 
   // Debounced AI semantic search (falls back to keyword matching server-side).
   useEffect(() => {
@@ -127,26 +186,7 @@ export function FileVaultApp({
 
   const handlePreviewNewWindow = (file: VaultFile, e: React.MouseEvent) => {
     e.stopPropagation();
-    const dummyHtml = `
-      <html>
-        <head>
-           <title>Preview - ${file.name}</title>
-           <style>
-             body { background: #050505; color: #EBE6DD; display: flex; flex-direction: column; align-items: center; justify-content: center; height: 100vh; margin: 0; font-family: monospace; text-transform: uppercase; letter-spacing: 0.1em; }
-             .box { border: 1px solid rgba(255,255,255,0.1); padding: 40px; border-radius: 12px; background: rgba(255,255,255,0.02); text-align: center; }
-           </style>
-        </head>
-        <body>
-           <div class="box">
-              <h2 style="margin-bottom: 8px;">${file.name}</h2>
-              <p style="opacity: 0.5; font-size: 12px;">Desboard File Viewer</p>
-           </div>
-        </body>
-      </html>
-    `;
-    const blob = new Blob([dummyHtml], { type: "text/html" });
-    const url = URL.createObjectURL(blob);
-    window.open(url, "_blank");
+    window.open(`/api/files/${file.id}/content`, "_blank");
   };
 
   const handleShareLink = (file: VaultFile, e: React.MouseEvent) => {
@@ -166,30 +206,38 @@ export function FileVaultApp({
     const parts = file.name.split(".");
     const extension = parts.length > 1 ? parts.pop()?.toLowerCase() || "" : "file";
 
-    setUploadingFile({
-      name: file.name,
-      size: (file.size / 1024 / 1024).toFixed(1) + " MB",
-      extension,
-    });
     setIsAnalyzing(true);
     setSuggestedTags([]);
     setUploadSummary(null);
     setSelectedSuggestions([]);
 
+    const reader = new FileReader();
+    const base64Promise = new Promise<string>((resolve, reject) => {
+      reader.onload = () => {
+        const result = reader.result as string;
+        resolve(result.split(",")[1] || result);
+      };
+      reader.onerror = reject;
+      reader.readAsDataURL(file);
+    });
+    let fileContent = "";
     try {
-      const reader = new FileReader();
-      const base64Promise = new Promise<string>((resolve, reject) => {
-        reader.onload = () => {
-          const result = reader.result as string;
-          const b64 = result.split(",")[1] || result;
-          resolve(b64);
-        };
-        reader.onerror = reject;
-        reader.readAsDataURL(file);
-      });
+      fileContent = await base64Promise;
+    } catch {
+      showToast("Could not read that file");
+      setIsAnalyzing(false);
+      return;
+    }
+    const mimeType = file.type || "application/octet-stream";
+    setUploadingFile({
+      name: file.name,
+      size: (file.size / 1024 / 1024).toFixed(1) + " MB",
+      extension,
+      content: fileContent,
+      mime: mimeType,
+    });
 
-      const fileContent = await base64Promise;
-      const mimeType = file.type || "text/plain";
+    try {
       const data = await api.analyze(file.name, fileContent, mimeType);
 
       if (data.tags && Array.isArray(data.tags)) {
@@ -239,12 +287,19 @@ export function FileVaultApp({
       extension: uploadingFile.extension,
       size: uploadingFile.size,
       created: "Just now",
-      source: "Direct Upload",
+      source:
+        uploadDestination === "drive"
+          ? "Drive"
+          : uploadDestination === "dropbox"
+            ? "Dropbox"
+            : uploadDestination === "onedrive"
+              ? "OneDrive"
+              : "Desboard",
       status: "Draft",
-      owner: "Current User",
+      owner: "Elias M.",
       tags: selectedSuggestions,
       access: ["Team"],
-      versions: [],
+      versions: [{ version: "v1.0", date: "Just now", author: "Elias M.", latest: true }],
       projectId: selectedFilterProject,
       clientId: null,
     };
@@ -252,9 +307,54 @@ export function FileVaultApp({
     setFilesList([newFile, ...filesList]);
     setUploadingFile(null);
     try {
-      await api.createFile(newFile);
+      // Bytes go with the metadata so the file gets a real preview + download.
+      const saved = await api.createFile(newFile, uploadingFile.content, uploadingFile.mime);
+      setFilesList((prev) => prev.map((f) => (f.id === saved.id ? saved : f)));
     } catch (e) {
       console.error("Failed to persist uploaded file", e);
+      showToast("Upload failed to save — try again");
+      setFilesList((prev) => prev.filter((f) => f.id !== newFile.id));
+    }
+  };
+
+  /** Upload a replacement binary as a new version of the selected file. */
+  const handleVersionUpload = async (file: File) => {
+    if (!selectedFile) return;
+    const reader = new FileReader();
+    const base64: string = await new Promise((resolve, reject) => {
+      reader.onload = () => {
+        const result = reader.result as string;
+        resolve(result.split(",")[1] || result);
+      };
+      reader.onerror = reject;
+      reader.readAsDataURL(file);
+    });
+    try {
+      const updated = await api.uploadFileVersion(
+        selectedFile.id,
+        base64,
+        file.type || "application/octet-stream",
+        "Elias M."
+      );
+      setFilesList((prev) => prev.map((f) => (f.id === updated.id ? updated : f)));
+      setSelectedFile(updated);
+      showToast(`New version of ${updated.name} uploaded`);
+    } catch (e) {
+      console.error("Failed to upload version", e);
+      showToast("Could not upload the new version");
+    }
+  };
+
+  const restoreVersion = async (version: string) => {
+    if (!selectedFile) return;
+    try {
+      const updated = await api.restoreFileVersion(selectedFile.id, version);
+      setFilesList((prev) => prev.map((f) => (f.id === updated.id ? updated : f)));
+      setSelectedFile(updated);
+      showToast(`Restored ${version}`);
+    } catch (e) {
+      console.error("Failed to restore version", e);
+      showToast("Could not restore that version");
     }
   };
 
@@ -270,6 +370,36 @@ export function FileVaultApp({
       setIsAddingTag(false);
       setNewTagVal("");
     }
+  };
+
+  const handleAddAccess = () => {
+    if (newAccessVal.trim() && selectedFile) {
+      const entry = newAccessVal.trim();
+      if (!selectedFile.access.includes(entry)) {
+        const updatedFile = { ...selectedFile, access: [...selectedFile.access, entry] };
+        setFilesList(filesList.map((f) => (f.id === updatedFile.id ? updatedFile : f)));
+        setSelectedFile(updatedFile);
+        api.updateFile(updatedFile.id, { access: updatedFile.access }).catch((e) => console.error("Failed to update access", e));
+      }
+      setIsAddingAccess(false);
+      setNewAccessVal("");
+    }
+  };
+
+  const removeAccess = (entry: string) => {
+    if (!selectedFile) return;
+    const updatedFile = { ...selectedFile, access: selectedFile.access.filter((x) => x !== entry) };
+    setFilesList(filesList.map((f) => (f.id === updatedFile.id ? updatedFile : f)));
+    setSelectedFile(updatedFile);
+    api.updateFile(updatedFile.id, { access: updatedFile.access }).catch((e) => console.error("Failed to update access", e));
+  };
+
+  const setFileLink = (patch: { projectId?: number | null; clientId?: string | null }) => {
+    if (!selectedFile) return;
+    const updatedFile = { ...selectedFile, ...patch };
+    setFilesList(filesList.map((f) => (f.id === updatedFile.id ? updatedFile : f)));
+    setSelectedFile(updatedFile);
+    api.updateFile(updatedFile.id, patch).catch((e) => console.error("Failed to update link", e));
   };
 
   const sendFileChat = async (prompt: string) => {
@@ -291,6 +421,18 @@ export function FileVaultApp({
   if (selectedFilterProject !== null) {
     currentFilteredFiles = currentFilteredFiles.filter((f) => f.projectId === selectedFilterProject);
   }
+  if (selectedTagFilter !== null) {
+    currentFilteredFiles = currentFilteredFiles.filter((f) => f.tags.includes(selectedTagFilter));
+  }
+  if (statusFilter !== null) {
+    currentFilteredFiles = currentFilteredFiles.filter((f) => f.status === statusFilter);
+  }
+  if (sidebarView === "recent") {
+    // filesList is already newest-first (server sorts by ord DESC).
+    currentFilteredFiles = currentFilteredFiles.slice(0, 12);
+  } else if (sidebarView === "shared") {
+    currentFilteredFiles = currentFilteredFiles.filter((f) => f.access.length > 0);
+  }
 
   const filteredFiles = searchQuery.trim()
     ? aiSearchResults
@@ -304,68 +446,75 @@ export function FileVaultApp({
     : currentFilteredFiles;
 
   const getFileIcon = (file: VaultFile) => {
-    if (file.type === "folder") return <Folder className="w-8 h-8 text-yellow-500" />;
+    if (file.type === "folder") return <Folder className="w-8 h-8 text-muted" />;
     switch (file.extension) {
       case "pdf":
-        return <FileText className="w-8 h-8 text-red-500" />;
+        return <FileText className="w-8 h-8 text-muted" />;
       case "ai":
-        return <PenTool className="w-8 h-8 text-orange-500" />;
+        return <PenTool className="w-8 h-8 text-muted" />;
       case "fig":
-        return <Figma className="w-8 h-8 text-purple-500" />;
+        return <Figma className="w-8 h-8 text-muted" />;
       case "mp4":
-        return <Video className="w-8 h-8 text-blue-500" />;
+        return <Video className="w-8 h-8 text-muted" />;
       case "png":
       case "jpg":
-        return <ImageIcon className="w-8 h-8 text-green-500" />;
+        return <ImageIcon className="w-8 h-8 text-muted" />;
       default:
-        return <FileText className="w-8 h-8 text-gray-400" />;
+        return <FileText className="w-8 h-8 text-muted" />;
     }
   };
 
-  const projectSidebar: { id: number; label: string; dot: string; toast: string }[] = [
-    { id: 1, label: "Nebula", dot: "bg-[#D85E25]", toast: "Moved to Nebula project" },
-    { id: 2, label: "Acme Corp", dot: "bg-blue-500", toast: "Moved to Acme Corp project" },
-    { id: 3, label: "GlobalNet", dot: "bg-purple-500", toast: "Moved to GlobalNet project" },
-  ];
+  const PROJECT_DOTS = ["bg-primary", "bg-slate", "bg-amber", "bg-moss"];
+  const projectSidebar: { id: number; label: string; dot: string; toast: string }[] = projects.map((p, i) => ({
+    id: Number(p.id.replace(/^p/, "")),
+    label: p.name,
+    dot: PROJECT_DOTS[i % PROJECT_DOTS.length],
+    toast: `Moved to ${p.name}`,
+  }));
 
   return (
     <div
-      className={`flex h-full text-[#EBE6DD] ${highContrast ? "bg-black" : "bg-[#050505]/40"} rounded-xl overflow-hidden transition-colors`}
+      className="flex h-full text-ink bg-panel rounded-2xl overflow-hidden transition-colors"
       onDragEnter={handleDrag}
       onDragLeave={handleDrag}
       onDragOver={handleDrag}
       onDrop={handleDrop}
     >
       {/* Sidebar */}
-      <div
-        className={`w-[200px] border-r ${highContrast ? "border-white/20 bg-black" : "border-white/10 bg-black/20"} flex flex-col p-4 shrink-0 transition-colors`}
-      >
-        <h3 className="font-display text-[16px] uppercase tracking-wider mb-6">Vault</h3>
+      <div className="w-[200px] flex flex-col p-4 shrink-0 border-r border-line transition-colors">
+        <h3 className="text-[13px] font-semibold text-ink mb-5">Vault</h3>
 
         <div className="flex flex-col gap-1 mb-8">
           <button
-            onClick={() => setSelectedFilterProject(null)}
-            className={`flex items-center gap-3 px-3 py-2 rounded-lg text-[11px] uppercase tracking-widest font-medium ${
-              selectedFilterProject === null ? "bg-white/10 text-white" : "text-white/50 hover:bg-white/5 hover:text-white transition-colors"
+            onClick={() => {
+              setSelectedFilterProject(null);
+              setSidebarView("all");
+            }}
+            className={`flex items-center gap-3 px-3 py-2 rounded-lg text-[13px] font-medium transition-colors ${
+              selectedFilterProject === null && sidebarView === "all" ? "bg-surface text-ink shadow-sm" : "text-ink/60 hover:bg-surface/60 hover:text-ink"
             }`}
           >
             <Folder className="w-4 h-4" /> All Files
           </button>
           <button
-            onClick={() => showToast("Recent files view coming soon")}
-            className="flex items-center gap-3 px-3 py-2 rounded-lg text-white/50 hover:bg-white/5 hover:text-white transition-colors text-[11px] uppercase tracking-widest font-medium"
+            onClick={() => setSidebarView("recent")}
+            className={`flex items-center gap-3 px-3 py-2 rounded-lg transition-colors text-[13px] font-medium ${
+              sidebarView === "recent" ? "bg-surface text-ink shadow-sm" : "text-ink/60 hover:bg-surface/60 hover:text-ink"
+            }`}
           >
             <History className="w-4 h-4" /> Recent
           </button>
           <button
-            onClick={() => showToast("Shared files view coming soon")}
-            className="flex items-center gap-3 px-3 py-2 rounded-lg text-white/50 hover:bg-white/5 hover:text-white transition-colors text-[11px] uppercase tracking-widest font-medium"
+            onClick={() => setSidebarView("shared")}
+            className={`flex items-center gap-3 px-3 py-2 rounded-lg transition-colors text-[13px] font-medium ${
+              sidebarView === "shared" ? "bg-surface text-ink shadow-sm" : "text-ink/60 hover:bg-surface/60 hover:text-ink"
+            }`}
           >
             <Users className="w-4 h-4" /> Shared
           </button>
         </div>
 
-        <h4 className="text-[10px] uppercase tracking-widest text-[#DBCBC2]/40 mb-3">Projects</h4>
+        <h4 className="text-[12px] text-muted mb-2.5">Projects</h4>
         <div className="flex flex-col gap-1 mb-8">
           {projectSidebar.map((proj) => (
             <button
@@ -382,68 +531,66 @@ export function FileVaultApp({
                 const sourceId = e.dataTransfer.getData("sourceId");
                 if (sourceId) moveFileToProject(sourceId, proj.id, proj.toast);
               }}
-              className={`flex items-center gap-2 px-3 py-1.5 rounded-lg transition-colors text-[11px] tracking-wide ${
+              className={`flex items-center gap-2 px-3 py-1.5 rounded-lg transition-colors text-[13px] ${
                 selectedFilterProject === proj.id
-                  ? "bg-white/10 text-white"
+                  ? "bg-surface text-ink shadow-sm"
                   : dragHoverProject === proj.id
-                  ? "bg-white/5 text-white"
-                  : "text-white/50 hover:text-white"
+                  ? "bg-surface/60 text-ink"
+                  : "text-ink/60 hover:text-ink"
               }`}
             >
-              <div className={`w-2 h-2 rounded-full ${proj.dot}`}></div> {proj.label}
+              <div className={`w-2 h-2 rounded-full shrink-0 ${proj.dot}`}></div> <span className="truncate">{proj.label}</span>
             </button>
           ))}
+          {projectSidebar.length === 0 && <span className="text-[12px] text-muted px-3">No projects yet</span>}
         </div>
 
-        <h4 className="text-[10px] uppercase tracking-widest text-[#DBCBC2]/40 mb-3">Tags</h4>
+        <h4 className="text-[12px] text-muted mb-2.5">Tags</h4>
         <div className="flex flex-wrap gap-2">
-          {["UI", "Brand", "Concept", "Final"].map((tag) => (
+          {tags.map((tag) => (
             <span
-              onClick={() => showToast("Filtered by tag: " + tag)}
-              key={tag}
-              className="px-2 py-1 rounded bg-white/5 text-[9px] uppercase tracking-widest text-white/60 cursor-pointer hover:bg-white/10"
+              onClick={() => setSelectedTagFilter((prev) => (prev === tag.name ? null : tag.name))}
+              key={tag.id}
+              className={`px-2 py-1 rounded-full text-[11px] cursor-pointer transition-colors ${
+                selectedTagFilter === tag.name ? "bg-primary text-white" : "bg-chip text-ink/60 hover:bg-line"
+              }`}
             >
-              #{tag}
+              #{tag.name}
             </span>
           ))}
+          {tags.length === 0 && <span className="text-[12px] text-muted">No tags yet</span>}
         </div>
 
-        <h4 className="text-[10px] uppercase tracking-widest text-[#DBCBC2]/40 mb-3 mt-8">Cloud Storage</h4>
+        <div className="flex items-center justify-between mb-2.5 mt-8">
+          <h4 className="text-[12px] text-muted">Cloud Storage</h4>
+          {onOpenConnections && (
+            <button onClick={onOpenConnections} className="text-[11px] text-primary hover:underline">
+              Manage
+            </button>
+          )}
+        </div>
         <div className="flex flex-col gap-1">
-          <button
-            onClick={() => {
-              setLinkedDrive(!linkedDrive);
-              showToast(linkedDrive ? "Google Drive unlinked" : "Google Drive linked");
-            }}
-            className={`flex items-center gap-3 px-3 py-2 rounded-lg transition-colors text-[11px] uppercase tracking-widest font-medium ${
-              linkedDrive ? "bg-white/10 text-white" : "text-white/50 hover:bg-white/5 hover:text-white"
-            }`}
-          >
-            <Cloud className="w-4 h-4" /> Google Drive {linkedDrive && <Check className="w-3 h-3 ml-auto text-green-400" />}
-          </button>
-          <button
-            onClick={() => {
-              setLinkedDropbox(!linkedDropbox);
-              showToast(linkedDropbox ? "Dropbox unlinked" : "Dropbox linked");
-            }}
-            className={`flex items-center gap-3 px-3 py-2 rounded-lg transition-colors text-[11px] uppercase tracking-widest font-medium ${
-              linkedDropbox ? "bg-white/10 text-white" : "text-white/50 hover:bg-white/5 hover:text-white"
-            }`}
-          >
-            <Archive className="w-4 h-4" /> Dropbox {linkedDropbox && <Check className="w-3 h-3 ml-auto text-green-400" />}
-          </button>
+          <div className="flex items-center gap-3 px-3 py-2 rounded-lg text-[13px] font-medium text-ink/60">
+            <Cloud className="w-4 h-4" /> Google Drive {linkedDrive && <Check className="w-3 h-3 ml-auto text-moss" />}
+          </div>
+          <div className="flex items-center gap-3 px-3 py-2 rounded-lg text-[13px] font-medium text-ink/60">
+            <Archive className="w-4 h-4" /> Dropbox {linkedDropbox && <Check className="w-3 h-3 ml-auto text-moss" />}
+          </div>
+          <div className="flex items-center gap-3 px-3 py-2 rounded-lg text-[13px] font-medium text-ink/60">
+            <Database className="w-4 h-4" /> OneDrive {linkedOneDrive && <Check className="w-3 h-3 ml-auto text-moss" />}
+          </div>
         </div>
 
         <div className="mt-auto pt-8">
-          <h4 className="text-[10px] uppercase tracking-widest text-[#DBCBC2]/40 mb-3">Preferences</h4>
+          <h4 className="text-[12px] text-muted mb-2.5">Preferences</h4>
           <button
-            onClick={() => setHighContrast(!highContrast)}
-            className="flex items-center justify-between w-full px-3 py-2 rounded-lg text-white/50 hover:bg-white/5 hover:text-white transition-colors text-[11px] uppercase tracking-widest font-medium"
+            onClick={() => onHighContrastChange(!highContrast)}
+            className="flex items-center justify-between w-full px-3 py-2 rounded-lg text-ink/60 hover:bg-surface/60 hover:text-ink transition-colors text-[13px] font-medium"
           >
             <div className="flex items-center gap-2">
               <Moon className="w-4 h-4" /> High Contrast
             </div>
-            <div className={`w-6 h-3.5 rounded-full flex items-center px-0.5 transition-colors ${highContrast ? "bg-[#D85E25]" : "bg-white/20"}`}>
+            <div className={`w-6 h-3.5 rounded-full flex items-center px-0.5 transition-colors ${highContrast ? "bg-primary" : "bg-line"}`}>
               <div className={`w-2 h-2 rounded-full bg-white transition-transform ${highContrast ? "translate-x-3" : "translate-x-0"}`} />
             </div>
           </button>
@@ -451,20 +598,21 @@ export function FileVaultApp({
       </div>
 
       {/* Main File Area */}
-      <div className="flex-1 flex flex-col min-w-0 relative">
+      <div className="flex-1 flex flex-col min-w-0 relative bg-paper">
         {/* Top Bar */}
-        <div className="h-[60px] border-b border-white/10 flex items-center justify-between px-6 shrink-0">
+        <div className="h-[60px] border-b border-line flex items-center justify-between px-6 shrink-0">
           <div className="flex items-center gap-4 flex-1">
-            <div className="relative w-full max-w-sm border border-transparent focus-within:border-[#D85E25] rounded-full transition-colors bg-white/5 px-4 py-2 flex items-center gap-2">
+            <div className="relative w-full max-w-sm border border-transparent focus-within:border-primary/50 rounded-full transition-colors bg-panel px-4 py-2 flex items-center gap-2">
               {isSearchingAI ? (
-                <Sparkles className="w-4 h-4 text-[#D85E25] animate-pulse" />
+                <Sparkles className="w-4 h-4 text-primary animate-pulse" />
               ) : (
-                <Search className="w-4 h-4 text-white/40" />
+                <Search className="w-4 h-4 text-muted" />
               )}
               <input
+                ref={searchInputRef}
                 type="text"
                 placeholder="Search files, tags, or use phrases like 'show branding'..."
-                className="bg-transparent border-none outline-none text-[12px] w-full text-white placeholder:text-white/40 font-mono"
+                className="bg-transparent border-none outline-none text-[13px] w-full text-ink placeholder:text-muted"
                 value={searchQuery}
                 onChange={(e) => setSearchQuery(e.target.value)}
               />
@@ -472,18 +620,18 @@ export function FileVaultApp({
           </div>
 
           <div className="flex items-center gap-4">
-            <div className="flex items-center gap-1 bg-white/5 rounded-lg p-1 border border-white/5">
-              <button onClick={() => setViewMode("grid")} className={`p-1.5 rounded ${viewMode === "grid" ? "bg-white/10 text-white" : "text-white/40 hover:text-white"}`}>
+            <div className="flex items-center gap-1 bg-panel rounded-lg p-1">
+              <button onClick={() => setViewMode("grid")} className={`p-1.5 rounded ${viewMode === "grid" ? "bg-surface text-ink shadow-sm" : "text-muted hover:text-ink"}`}>
                 <LayoutGrid className="w-4 h-4" />
               </button>
-              <button onClick={() => setViewMode("list")} className={`p-1.5 rounded ${viewMode === "list" ? "bg-white/10 text-white" : "text-white/40 hover:text-white"}`}>
+              <button onClick={() => setViewMode("list")} className={`p-1.5 rounded ${viewMode === "list" ? "bg-surface text-ink shadow-sm" : "text-muted hover:text-ink"}`}>
                 <List className="w-4 h-4" />
               </button>
             </div>
             <input type="file" ref={fileInputRef} onChange={handleFileSelect} className="hidden" />
             <button
               onClick={() => fileInputRef.current?.click()}
-              className="flex items-center gap-2 bg-[#D85E25] hover:bg-[#D85E25]/80 transition-colors px-4 py-2 rounded-full text-[11px] uppercase tracking-widest font-medium"
+              className="flex items-center gap-2 bg-primary hover:bg-primary/85 text-white transition-colors px-4 py-2 rounded-full text-[13px] font-medium"
             >
               <Upload className="w-4 h-4" /> Upload
             </button>
@@ -496,50 +644,50 @@ export function FileVaultApp({
               initial={{ opacity: 0 }}
               animate={{ opacity: 1 }}
               exit={{ opacity: 0 }}
-              className="absolute inset-x-0 bottom-0 top-[60px] bg-black/60 backdrop-blur-md z-50 flex items-center justify-center p-6"
+              className="absolute inset-x-0 bottom-0 top-[60px] bg-ink/30 backdrop-blur-sm z-50 flex items-center justify-center p-6"
             >
               <motion.div
                 initial={{ scale: 0.95, opacity: 0 }}
                 animate={{ scale: 1, opacity: 1 }}
-                className="bg-[#111] border border-white/10 rounded-2xl w-full max-w-md p-6 shadow-2xl flex flex-col"
+                className="bg-surface border border-line rounded-2xl w-full max-w-md p-6 shadow-xl flex flex-col"
               >
                 <div className="flex justify-between items-start mb-6">
                   <div className="flex items-center gap-3">
-                    <div className="w-10 h-10 rounded bg-white/5 flex items-center justify-center">
-                      <FileText className="w-5 h-5 text-white/60" />
+                    <div className="w-10 h-10 rounded bg-chip flex items-center justify-center">
+                      <FileText className="w-5 h-5 text-ink/60" />
                     </div>
                     <div>
-                      <h3 className="font-display text-[16px] uppercase tracking-wider text-white truncate max-w-[200px]">
+                      <h3 className="text-[15px] font-semibold text-ink truncate max-w-[200px]">
                         {uploadingFile.name}
                       </h3>
-                      <span className="text-[10px] font-mono text-white/40">
+                      <span className="text-[12px] text-muted">
                         {uploadingFile.size} • {uploadingFile.extension.toUpperCase()}
                       </span>
                     </div>
                   </div>
-                  <button onClick={() => setUploadingFile(null)} className="text-white/40 hover:text-white transition-colors">
+                  <button onClick={() => setUploadingFile(null)} className="text-muted hover:text-ink transition-colors">
                     <X className="w-4 h-4" />
                   </button>
                 </div>
 
-                <div className="bg-white/5 border border-white/10 rounded-xl p-5 mb-6 relative overflow-hidden">
+                <div className="bg-panel border border-line rounded-xl p-5 mb-6 relative overflow-hidden">
                   {isAnalyzing ? (
                     <div className="flex flex-col items-center justify-center py-6">
-                      <Sparkles className="w-6 h-6 text-purple-400 animate-pulse mb-3" />
-                      <span className="text-[11px] uppercase tracking-widest font-mono text-purple-300">AI Analyzing Content...</span>
+                      <Sparkles className="w-6 h-6 text-moss animate-pulse mb-3" />
+                      <span className="text-[13px] text-moss">AI analyzing content...</span>
                     </div>
                   ) : (
                     <div className="flex flex-col gap-4">
                       {uploadSummary && (
-                        <div className="text-[12px] text-white/70 leading-relaxed border-b border-white/10 pb-4">{uploadSummary}</div>
+                        <div className="text-[13px] text-ink/70 leading-relaxed border-b border-line pb-4">{uploadSummary}</div>
                       )}
                       <div>
                         <div className="flex justify-between items-end mb-3">
                           <div className="flex items-center gap-2">
-                            <Sparkles className="w-4 h-4 text-purple-400" />
-                            <span className="text-[10px] uppercase tracking-widest font-mono text-purple-300">Suggested Tags</span>
+                            <Sparkles className="w-4 h-4 text-moss" />
+                            <span className="text-[13px] font-medium text-moss">Suggested tags</span>
                           </div>
-                          <span className="text-[9px] uppercase tracking-widest text-white/40">{selectedSuggestions.length} Selected</span>
+                          <span className="text-[11px] text-muted">{selectedSuggestions.length} selected</span>
                         </div>
                         <div className="flex flex-wrap gap-2">
                           {suggestedTags.map((tag) => (
@@ -549,10 +697,10 @@ export function FileVaultApp({
                               onClick={() =>
                                 setSelectedSuggestions((prev) => (prev.includes(tag) ? prev.filter((t) => t !== tag) : [...prev, tag]))
                               }
-                              className={`px-3 py-1.5 rounded-lg text-[10px] uppercase font-mono tracking-widest transition-all border ${
+                              className={`px-3 py-1.5 rounded-full text-[12px] transition-all ${
                                 selectedSuggestions.includes(tag)
-                                  ? "bg-purple-500/20 border-purple-500/50 text-purple-200"
-                                  : "bg-transparent border-white/20 text-white/60 hover:text-white hover:border-white/40"
+                                  ? "bg-moss/15 text-moss"
+                                  : "bg-chip text-ink/60 hover:text-ink"
                               }`}
                             >
                               {selectedSuggestions.includes(tag) && <Check className="w-3 h-3 inline-block mr-1 -mt-0.5" />}
@@ -565,58 +713,70 @@ export function FileVaultApp({
                   )}
                 </div>
 
-                {!linkedDrive && !linkedDropbox ? (
-                  <div className="mb-4 text-center p-4 border border-red-500/20 bg-red-500/10 rounded-xl">
-                    <span className="text-[11px] text-red-400 block mb-2 uppercase tracking-widest font-mono">No Hosting Linked</span>
-                    <span className="text-[10px] text-white/50 block">
-                      Desboard does not host files directly. Please link Google Drive or Dropbox from the sidebar to upload.
-                    </span>
+                <div className="mb-6 flex flex-col gap-2">
+                  <span className="text-[13px] text-muted block">Upload destination</span>
+                  <div className="flex gap-2">
+                    <button
+                      onClick={() => setUploadDestination("desboard")}
+                      className={`flex-1 py-3 px-4 rounded-xl flex items-center justify-center gap-2 transition-all text-[13px] font-medium ${
+                        uploadDestination === "desboard" ? "bg-primary/10 text-primary" : "bg-chip text-ink/60 hover:bg-line"
+                      }`}
+                    >
+                      <Upload className="w-4 h-4" /> Desboard
+                    </button>
+                    {linkedDrive && (
+                      <button
+                        onClick={() => setUploadDestination("drive")}
+                        className={`flex-1 py-3 px-4 rounded-xl flex items-center justify-center gap-2 transition-all text-[13px] font-medium ${
+                          uploadDestination === "drive" ? "bg-moss/10 text-moss" : "bg-chip text-ink/60 hover:bg-line"
+                        }`}
+                      >
+                        <Cloud className="w-4 h-4" /> Drive
+                      </button>
+                    )}
+                    {linkedDropbox && (
+                      <button
+                        onClick={() => setUploadDestination("dropbox")}
+                        className={`flex-1 py-3 px-4 rounded-xl flex items-center justify-center gap-2 transition-all text-[13px] font-medium ${
+                          uploadDestination === "dropbox" ? "bg-slate/10 text-slate" : "bg-chip text-ink/60 hover:bg-line"
+                        }`}
+                      >
+                        <Archive className="w-4 h-4" /> Dropbox
+                      </button>
+                    )}
+                    {linkedOneDrive && (
+                      <button
+                        onClick={() => setUploadDestination("onedrive")}
+                        className={`flex-1 py-3 px-4 rounded-xl flex items-center justify-center gap-2 transition-all text-[13px] font-medium ${
+                          uploadDestination === "onedrive" ? "bg-amber/10 text-amber" : "bg-chip text-ink/60 hover:bg-line"
+                        }`}
+                      >
+                        <Database className="w-4 h-4" /> OneDrive
+                      </button>
+                    )}
                   </div>
-                ) : (
-                  <div className="mb-6 flex flex-col gap-2">
-                    <span className="text-[10px] uppercase font-mono text-white/50 tracking-widest block">Upload Destination</span>
-                    <div className="flex gap-2">
-                      {linkedDrive && (
-                        <button
-                          onClick={() => setUploadDestination("drive")}
-                          className={`flex-1 py-3 px-4 rounded-xl border flex items-center justify-center gap-2 transition-all text-[11px] uppercase tracking-widest font-bold ${
-                            uploadDestination === "drive" ? "border-[#34A853] bg-[#34A853]/10 text-[#34A853]" : "border-white/10 bg-white/5 text-white/50 hover:bg-white/10"
-                          }`}
-                        >
-                          <Cloud className="w-4 h-4" /> Drive
-                        </button>
-                      )}
-                      {linkedDropbox && (
-                        <button
-                          onClick={() => setUploadDestination("dropbox")}
-                          className={`flex-1 py-3 px-4 rounded-xl border flex items-center justify-center gap-2 transition-all text-[11px] uppercase tracking-widest font-bold ${
-                            uploadDestination === "dropbox" ? "border-[#0061FF] bg-[#0061FF]/20 text-[#0061FF]" : "border-white/10 bg-white/5 text-white/50 hover:bg-white/10"
-                          }`}
-                        >
-                          <Archive className="w-4 h-4" /> Dropbox
-                        </button>
-                      )}
-                    </div>
-                  </div>
-                )}
+                  <span className="text-[11px] text-muted">
+                    Desboard stores the file locally. Drive/Dropbox/OneDrive sync is a future integration.
+                  </span>
+                </div>
 
                 <div className="flex gap-3 mt-auto">
                   <button
                     onClick={() => setUploadingFile(null)}
-                    className="flex-1 py-2.5 rounded-lg border border-white/10 text-white/60 hover:text-white hover:bg-white/5 transition-colors text-[11px] uppercase tracking-widest font-bold"
+                    className="flex-1 py-2.5 rounded-lg bg-chip hover:bg-line text-ink transition-colors text-[13px] font-semibold"
                   >
                     Cancel
                   </button>
                   <button
-                    disabled={isAnalyzing || (!linkedDrive && !linkedDropbox) || !uploadDestination || uploadDestination === "desboard"}
+                    disabled={isAnalyzing || !uploadDestination}
                     onClick={handleConfirmUpload}
-                    className={`flex-1 py-2.5 rounded-lg text-[11px] uppercase tracking-widest font-bold transition-all flex items-center justify-center gap-2 ${
-                      isAnalyzing || (!linkedDrive && !linkedDropbox) || !uploadDestination || uploadDestination === "desboard"
-                        ? "bg-white/10 text-white/40"
-                        : "bg-[#D85E25] text-white hover:bg-[#D85E25]/80"
+                    className={`flex-1 py-2.5 rounded-lg text-[13px] font-semibold transition-all flex items-center justify-center gap-2 ${
+                      isAnalyzing || !uploadDestination
+                        ? "bg-chip text-muted"
+                        : "bg-primary text-white hover:bg-primary/85"
                     }`}
                   >
-                    <Upload className="w-3.5 h-3.5" /> Confirm & Upload
+                    <Upload className="w-3.5 h-3.5" /> Confirm &amp; Upload
                   </button>
                 </div>
               </motion.div>
@@ -628,16 +788,16 @@ export function FileVaultApp({
               initial={{ opacity: 0 }}
               animate={{ opacity: 1 }}
               exit={{ opacity: 0 }}
-              className="absolute inset-x-0 bottom-0 top-[60px] bg-black/95 backdrop-blur-2xl z-[60] flex flex-col pt-6 px-6"
+              className="absolute inset-x-0 bottom-0 top-[60px] bg-ink z-[60] flex flex-col pt-6 px-6"
             >
               <div className="flex justify-between items-center mb-6 px-4">
                 <div>
-                  <h3 className="font-display text-[20px] uppercase tracking-wider text-white">Compare Versions</h3>
-                  <p className="text-[11px] font-mono text-white/40">{selectedFile.name}</p>
+                  <h3 className="text-[18px] font-semibold text-paper">Compare versions</h3>
+                  <p className="text-[12.5px] text-paper/50">{selectedFile.name}</p>
                 </div>
                 <button
                   onClick={() => setIsComparing(false)}
-                  className="w-10 h-10 rounded-full bg-white/10 flex items-center justify-center hover:bg-white/20 transition-colors text-white/60 hover:text-white"
+                  className="w-10 h-10 rounded-full bg-paper/10 flex items-center justify-center hover:bg-paper/20 transition-colors text-paper/70 hover:text-paper"
                 >
                   <X className="w-5 h-5" />
                 </button>
@@ -658,7 +818,13 @@ export function FileVaultApp({
                           </span>
                         </div>
                       </div>
-                      <button onClick={() => showToast("Restored previous version")} className="text-[#D85E25] hover:text-[#D85E25]/80 text-[10px] uppercase tracking-widest font-mono">
+                      <button
+                        onClick={() => {
+                          restoreVersion(selectedVersionsToCompare[side]);
+                          setIsComparing(false);
+                        }}
+                        className="text-primary hover:text-primary/80 text-[10px] uppercase tracking-widest font-mono"
+                      >
                         Restore This
                       </button>
                     </div>
@@ -670,7 +836,7 @@ export function FileVaultApp({
                         <div className="h-3 w-4/5 bg-gray-200 mb-3 rounded-sm"></div>
                         <div
                           className={`h-48 w-full my-6 rounded-sm border-2 border-dashed flex items-center justify-center font-bold uppercase tracking-widest text-center whitespace-pre-wrap ${
-                            side === 0 ? "bg-blue-100 border-blue-300 text-blue-500" : "bg-red-50 border-red-200 text-red-400"
+                            side === 0 ? "bg-gray-200 border-gray-400 text-gray-700" : "bg-gray-50 border-gray-200 text-gray-400"
                           }`}
                         >
                           {side === 0 ? "Updated Banner Draft" : "Original Empty State"}
@@ -688,28 +854,60 @@ export function FileVaultApp({
         {/* Files */}
         <div className="flex-1 overflow-y-auto p-6 relative">
           {dragActive && (
-            <div className="absolute inset-0 bg-[#D85E25]/10 border-2 border-dashed border-[#D85E25] z-10 rounded-lg flex items-center justify-center backdrop-blur-sm m-4">
+            <div className="absolute inset-0 bg-primary/[0.06] border-2 border-dashed border-primary z-10 rounded-lg flex items-center justify-center backdrop-blur-sm m-4">
               <div className="flex flex-col items-center gap-4">
-                <Upload className="w-12 h-12 text-[#D85E25]" />
-                <span className="font-display text-[24px] uppercase tracking-widest text-[#D85E25]">Drop files to upload</span>
+                <Upload className="w-12 h-12 text-primary" />
+                <span className="text-[20px] font-semibold text-primary">Drop files to upload</span>
               </div>
             </div>
           )}
 
-          <div className="mb-6 flex items-center justify-between">
-            <div className="flex items-center gap-2 text-[12px] text-white/50 tracking-wide font-mono">
-              <span className="hover:text-white cursor-pointer">Root</span> <ChevronRight className="w-3 h-3" /> <span>All Files</span>
+          <div className="mb-6 flex items-center justify-between relative">
+            <div className="flex items-center gap-2 text-[13px] text-muted">
+              <span className="hover:text-ink cursor-pointer">Root</span> <ChevronRight className="w-3 h-3" /> <span className="text-ink/70">All Files</span>
             </div>
             <button
-              onClick={() => showToast("Filter options coming soon")}
-              className="flex items-center gap-2 text-[10px] uppercase tracking-widest font-mono text-white/50 hover:text-white transition-colors"
+              onClick={() => setShowFilterMenu((v) => !v)}
+              className={`flex items-center gap-2 text-[12.5px] transition-colors ${statusFilter ? "text-primary font-medium" : "text-muted hover:text-ink"}`}
             >
-              <Filter className="w-3.5 h-3.5" /> Filter
+              <Filter className="w-3.5 h-3.5" /> {statusFilter ? `Status: ${statusFilter}` : "Filter"}
             </button>
+            {showFilterMenu && (
+              <>
+                <div className="fixed inset-0 z-10" onClick={() => setShowFilterMenu(false)} />
+                <div className="absolute right-0 top-7 z-20 bg-surface border border-line rounded-xl shadow-lg p-2 flex flex-col gap-0.5 min-w-[150px]">
+                  {(["Draft", "Review", "Approved", "Delivered"] as FileStatus[]).map((s) => (
+                    <button
+                      key={s}
+                      onClick={() => {
+                        setStatusFilter((prev) => (prev === s ? null : s));
+                        setShowFilterMenu(false);
+                      }}
+                      className={`text-left px-3 py-1.5 rounded-lg text-[12.5px] transition-colors ${
+                        statusFilter === s ? "bg-primary/10 text-primary font-medium" : "text-ink/70 hover:bg-chip"
+                      }`}
+                    >
+                      {s}
+                    </button>
+                  ))}
+                  {statusFilter && (
+                    <button
+                      onClick={() => {
+                        setStatusFilter(null);
+                        setShowFilterMenu(false);
+                      }}
+                      className="text-left px-3 py-1.5 rounded-lg text-[12.5px] text-muted hover:text-ink border-t border-line mt-1 pt-2"
+                    >
+                      Clear filter
+                    </button>
+                  )}
+                </div>
+              </>
+            )}
           </div>
 
           {viewMode === "grid" ? (
-            <div className="grid grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-4">
+            <div className="grid grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-3">
               {filteredFiles.map((file) => (
                 <div
                   key={file.id}
@@ -733,28 +931,34 @@ export function FileVaultApp({
                     setSelectedVersionsToCompare([]);
                     setIsComparing(false);
                   }}
-                  className={`bg-[#111]/40 border ${
-                    selectedFile?.id === file.id ? "border-[#D85E25] bg-[#111]/80" : "border-white/5"
-                  } hover:bg-white/5 rounded-xl p-4 cursor-pointer hover:border-white/20 transition-all flex flex-col group`}
+                  className={`rounded-xl p-4 cursor-pointer transition-all flex flex-col group ${
+                    selectedFile?.id === file.id ? "bg-surface shadow-sm ring-1 ring-primary/40" : "bg-surface hover:bg-chip"
+                  }`}
                 >
                   <div className="flex justify-between items-start mb-4">
-                    <div className="p-3 bg-white/5 rounded-lg">{getFileIcon(file)}</div>
-                    <button className="p-1 opacity-0 group-hover:opacity-100 transition-opacity text-white/40 hover:text-white">
+                    {previewableKind(file) === "image" ? (
+                      <div className="w-12 h-12 rounded-lg overflow-hidden bg-chip">
+                        <img src={contentUrl(file)} alt={file.name} className="w-full h-full object-cover" />
+                      </div>
+                    ) : (
+                      <div className="p-3 bg-chip rounded-lg">{getFileIcon(file)}</div>
+                    )}
+                    <button className="p-1 opacity-0 group-hover:opacity-100 transition-opacity text-muted hover:text-ink">
                       <MoreVertical className="w-4 h-4" />
                     </button>
                   </div>
-                  <h5 className="font-medium text-[13px] truncate mb-1" title={file.name}>
+                  <h5 className="font-medium text-[13.5px] text-ink truncate mb-1" title={file.name}>
                     {file.name}
                   </h5>
                   <div className="flex items-center justify-between mt-auto pt-4 relative">
-                    <span className="text-[10px] text-[#DBCBC2]/40 font-mono uppercase truncate">{file.size || "Folder"}</span>
+                    <span className="text-[11.5px] text-muted truncate">{file.size || "Folder"}</span>
                     <span
-                      className={`text-[9px] uppercase tracking-widest px-2 py-0.5 rounded ${
+                      className={`text-[10.5px] px-2 py-0.5 rounded-full font-medium ${
                         file.status === "Approved"
-                          ? "bg-green-500/20 text-green-400"
+                          ? "bg-moss/10 text-moss"
                           : file.status === "Review"
-                          ? "bg-yellow-500/20 text-yellow-400"
-                          : "bg-white/10 text-white/40"
+                          ? "bg-amber/10 text-amber"
+                          : "bg-chip text-muted"
                       }`}
                     >
                       {file.status}
@@ -765,7 +969,7 @@ export function FileVaultApp({
             </div>
           ) : (
             <div className="flex flex-col gap-2">
-              <div className="grid grid-cols-12 gap-4 px-4 py-2 border-b border-white/5 text-[10px] uppercase tracking-widest text-[#DBCBC2]/40 font-mono mb-2">
+              <div className="grid grid-cols-12 gap-4 px-4 py-2 border-b border-line text-[11.5px] text-muted mb-2">
                 <div className="col-span-5">Name</div>
                 <div className="col-span-2">Date Modified</div>
                 <div className="col-span-1">Size</div>
@@ -795,31 +999,31 @@ export function FileVaultApp({
                     setSelectedVersionsToCompare([]);
                     setIsComparing(false);
                   }}
-                  className={`grid grid-cols-12 gap-4 px-4 py-3 items-center rounded-lg cursor-pointer border ${
-                    selectedFile?.id === file.id ? "bg-[#111]/80 border-[#D85E25]" : "bg-white/[0.02] border-transparent hover:bg-white/[0.04]"
+                  className={`grid grid-cols-12 gap-4 px-4 py-3 items-center rounded-lg cursor-pointer transition-colors ${
+                    selectedFile?.id === file.id ? "bg-surface shadow-sm ring-1 ring-primary/40" : "hover:bg-surface/70"
                   }`}
                 >
                   <div className="col-span-5 flex items-center gap-3 truncate">
                     {getFileIcon(file)}
-                    <span className="text-[13px] truncate">{file.name}</span>
+                    <span className="text-[13.5px] text-ink truncate">{file.name}</span>
                   </div>
-                  <div className="col-span-2 text-[11px] text-[#DBCBC2]/60 font-mono">{file.created}</div>
-                  <div className="col-span-1 text-[11px] text-[#DBCBC2]/60 font-mono">{file.size || "--"}</div>
+                  <div className="col-span-2 text-[12px] text-muted">{file.created}</div>
+                  <div className="col-span-1 text-[12px] text-muted">{file.size || "--"}</div>
                   <div className="col-span-2">
                     <span
-                      className={`text-[9px] uppercase tracking-widest px-2 py-0.5 rounded ${
+                      className={`text-[10.5px] px-2 py-0.5 rounded-full font-medium ${
                         file.status === "Approved"
-                          ? "bg-green-500/20 text-green-400"
+                          ? "bg-moss/10 text-moss"
                           : file.status === "Review"
-                          ? "bg-yellow-500/20 text-yellow-400"
-                          : "bg-white/10 text-white/40"
+                          ? "bg-amber/10 text-amber"
+                          : "bg-chip text-muted"
                       }`}
                     >
                       {file.status}
                     </span>
                   </div>
-                  <div className="col-span-2 flex items-center gap-2 text-[11px]">
-                    <div className="w-5 h-5 rounded-full bg-[#D85E25] flex items-center justify-center text-[9px] uppercase">{file.owner.charAt(0)}</div>
+                  <div className="col-span-2 flex items-center gap-2 text-[12px] text-ink/70">
+                    <div className="w-5 h-5 rounded-full bg-primary flex items-center justify-center text-[10px] text-white uppercase">{file.owner.charAt(0)}</div>
                     <span className="truncate">{file.owner}</span>
                   </div>
                 </div>
@@ -831,20 +1035,25 @@ export function FileVaultApp({
 
       {/* Right Sidebar (Inspector) */}
       {selectedFile && (
-        <div className={`w-[280px] border-l ${highContrast ? "border-white/20 bg-black" : "border-white/10 bg-[#050505]"} flex flex-col shrink-0`}>
-          <div className={`h-[60px] border-b ${highContrast ? "border-white/20" : "border-white/10"} flex items-center justify-between px-4`}>
-            <h4 className="font-display uppercase tracking-widest text-[14px]">Inspector</h4>
+        <div className={`w-[280px] flex flex-col shrink-0 bg-paper ${highContrast ? "border-l-2 border-ink" : ""}`}>
+          <div className="h-[60px] border-b border-line flex items-center justify-between px-4">
+            <h4 className="text-[14px] font-semibold text-ink">Inspector</h4>
             <div className="flex gap-2">
-              <button onClick={() => showToast("Downloading " + selectedFile.name)} className="p-1.5 text-white/40 hover:text-white rounded bg-white/5">
+              <a
+                href={`/api/files/${selectedFile.id}/download`}
+                download={selectedFile.name}
+                title={selectedFile.hasContent ? `Download ${selectedFile.name}` : "No stored content — downloads a delivery note"}
+                className="p-1.5 text-muted hover:text-ink rounded bg-panel"
+              >
                 <Download className="w-4 h-4" />
-              </button>
+              </a>
               <button
                 onClick={() => {
                   setSelectedFile(null);
                   setSelectedVersionsToCompare([]);
                   setIsComparing(false);
                 }}
-                className="p-1.5 text-white/40 hover:text-[#D85E25] rounded bg-white/5"
+                className="p-1.5 text-muted hover:text-primary rounded bg-panel"
               >
                 <X className="w-4 h-4" />
               </button>
@@ -852,45 +1061,66 @@ export function FileVaultApp({
           </div>
 
           <div className="flex-1 overflow-y-auto">
-            <div className="aspect-video bg-black/40 border-b border-white/5 flex items-center justify-center relative group">
-              {getFileIcon(selectedFile)}
+            <div
+              className={`aspect-video bg-panel flex items-center justify-center relative group overflow-hidden ${
+                selectedFile.type === "file" ? "cursor-pointer" : ""
+              }`}
+              onClick={() => selectedFile.type === "file" && setPreviewingFile(selectedFile)}
+              title={selectedFile.type === "file" ? "Click to open full preview" : undefined}
+            >
+              {previewableKind(selectedFile) === "image" ? (
+                <img src={contentUrl(selectedFile)} alt={selectedFile.name} className="w-full h-full object-cover" />
+              ) : previewableKind(selectedFile) === "pdf" ? (
+                <iframe src={contentUrl(selectedFile)} title={selectedFile.name} className="w-full h-full border-0 pointer-events-none bg-white" />
+              ) : previewableKind(selectedFile) === "video" ? (
+                <video src={contentUrl(selectedFile)} className="w-full h-full object-cover pointer-events-none" muted />
+              ) : (
+                getFileIcon(selectedFile)
+              )}
               {selectedFile.type === "file" && (
-                <div className="absolute inset-0 bg-black/80 opacity-0 group-hover:opacity-100 transition-opacity flex flex-col items-center justify-center gap-3">
-                  <button
-                    onClick={() => setPreviewingFile(selectedFile)}
-                    className="flex items-center gap-2 bg-[#D85E25] px-4 py-2 rounded-full text-[11px] uppercase tracking-widest font-medium hover:bg-[#D85E25]/80 transition-colors"
-                  >
-                    <Eye className="w-4 h-4" /> Preview
-                  </button>
-                  <div className="flex gap-2">
+                <>
+                  <div className="absolute inset-0 bg-ink/0 group-hover:bg-ink/60 transition-colors flex items-center justify-center pointer-events-none">
+                    <span className="flex items-center gap-2 bg-primary px-4 py-2 rounded-full text-[12.5px] font-medium text-white opacity-0 group-hover:opacity-100 transition-opacity">
+                      <Eye className="w-4 h-4" /> Open full preview
+                    </span>
+                  </div>
+                  <div className="absolute top-2 right-2 flex gap-1.5 opacity-0 group-hover:opacity-100 transition-opacity">
                     <button
-                      onClick={(e) => handlePreviewNewWindow(selectedFile, e)}
-                      className="flex items-center gap-2 bg-white/10 px-3 py-1.5 rounded-full text-[9px] uppercase tracking-widest font-medium hover:bg-white/20 transition-colors"
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        handlePreviewNewWindow(selectedFile, e);
+                      }}
+                      title="Open in new window"
+                      className="p-1.5 bg-ink/60 hover:bg-ink/80 rounded-full text-white transition-colors"
                     >
-                      <Maximize className="w-3 h-3" /> New Window
+                      <Maximize className="w-3.5 h-3.5" />
                     </button>
                     <button
-                      onClick={(e) => handleShareLink(selectedFile, e)}
-                      className="flex items-center gap-2 bg-white/10 px-3 py-1.5 rounded-full text-[9px] uppercase tracking-widest font-medium hover:bg-white/20 transition-colors"
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        handleShareLink(selectedFile, e);
+                      }}
+                      title="Copy share link"
+                      className="p-1.5 bg-ink/60 hover:bg-ink/80 rounded-full text-white transition-colors"
                     >
-                      <LinkIcon className="w-3 h-3" /> Share
+                      <LinkIcon className="w-3.5 h-3.5" />
                     </button>
                   </div>
-                </div>
+                </>
               )}
             </div>
 
             <div className="p-5">
-              <h3 className="text-[16px] font-medium leading-tight mb-2 break-all">{selectedFile.name}</h3>
+              <h3 className="text-[16px] font-semibold text-ink leading-tight mb-2 break-all">{selectedFile.name}</h3>
               <div className="flex gap-2 flex-wrap mb-6 items-center">
                 {selectedFile.tags.map((t) => (
-                  <span key={t} className="px-2 py-0.5 rounded bg-white/5 text-[9px] uppercase tracking-widest text-[#DBCBC2]/60 border border-white/5">
+                  <span key={t} className="px-2 py-0.5 rounded-full bg-panel text-[11px] text-ink/60">
                     #{t}
                   </span>
                 ))}
                 {isAddingTag ? (
-                  <div className="flex items-center gap-1 bg-white/5 px-2 py-0.5 rounded border border-[#D85E25]/50">
-                    <span className="text-[9px] text-[#DBCBC2]/60">#</span>
+                  <div className="flex items-center gap-1 bg-panel px-2 py-0.5 rounded-full">
+                    <span className="text-[11px] text-muted">#</span>
                     <input
                       autoFocus
                       value={newTagVal}
@@ -902,46 +1132,46 @@ export function FileVaultApp({
                           setNewTagVal("");
                         }
                       }}
-                      className="bg-transparent border-none outline-none text-[9px] uppercase tracking-widest text-white w-16"
+                      className="bg-transparent border-none outline-none text-[11px] text-ink w-16"
                     />
-                    <button onClick={handleAddTag} className="text-[#D85E25] hover:text-white ml-1">
+                    <button onClick={handleAddTag} className="text-primary hover:text-ink ml-1">
                       <CheckCircle className="w-3 h-3" />
                     </button>
                   </div>
                 ) : (
                   <button
                     onClick={() => setIsAddingTag(true)}
-                    className="flex items-center gap-1 px-2 py-0.5 rounded hover:bg-white/5 text-[9px] uppercase tracking-widest text-[#D85E25] border border-transparent hover:border-[#D85E25]/30 transition-colors"
+                    className="flex items-center gap-1 px-2 py-0.5 rounded-full hover:bg-panel text-[11px] text-primary transition-colors"
                   >
-                    <Plus className="w-3 h-3" /> Add Tag
+                    <Plus className="w-3 h-3" /> Add tag
                   </button>
                 )}
               </div>
 
               {/* Tabs */}
-              <div className="flex border-b border-white/10 mb-6 font-mono text-[10px] uppercase tracking-widest overflow-x-auto">
+              <div className="flex border-b border-line mb-6 text-[12.5px] overflow-x-auto">
                 <button
                   onClick={() => setActiveTab("details")}
-                  className={`flex-1 min-w-[60px] pb-2 border-b-2 transition-colors ${activeTab === "details" ? "border-[#D85E25] text-[#D85E25]" : "border-transparent text-white/40 hover:text-white"}`}
+                  className={`flex-1 min-w-[60px] pb-2 border-b-2 transition-colors ${activeTab === "details" ? "border-primary text-primary font-medium" : "border-transparent text-muted hover:text-ink"}`}
                 >
                   Details
                 </button>
                 <button
                   onClick={() => setActiveTab("versions")}
-                  className={`flex-1 min-w-[60px] pb-2 border-b-2 transition-colors ${activeTab === "versions" ? "border-[#D85E25] text-[#D85E25]" : "border-transparent text-white/40 hover:text-white"}`}
+                  className={`flex-1 min-w-[60px] pb-2 border-b-2 transition-colors ${activeTab === "versions" ? "border-primary text-primary font-medium" : "border-transparent text-muted hover:text-ink"}`}
                 >
                   History
                 </button>
                 <button
                   onClick={() => setActiveTab("links")}
-                  className={`flex-1 min-w-[60px] pb-2 border-b-2 transition-colors ${activeTab === "links" ? "border-[#D85E25] text-[#D85E25]" : "border-transparent text-white/40 hover:text-white"}`}
+                  className={`flex-1 min-w-[60px] pb-2 border-b-2 transition-colors ${activeTab === "links" ? "border-primary text-primary font-medium" : "border-transparent text-muted hover:text-ink"}`}
                 >
                   Links
                 </button>
                 <button
                   onClick={() => setActiveTab("ai")}
                   className={`flex-1 min-w-[60px] pb-2 border-b-2 transition-colors flex items-center justify-center gap-1 ${
-                    activeTab === "ai" ? "border-[#D85E25] text-[#D85E25]" : "border-transparent text-[#34A853] hover:text-[#34A853]/80"
+                    activeTab === "ai" ? "border-primary text-primary font-medium" : "border-transparent text-moss hover:text-moss/80"
                   }`}
                 >
                   <Sparkles className="w-3 h-3" /> AI
@@ -949,43 +1179,68 @@ export function FileVaultApp({
               </div>
 
               {activeTab === "details" && (
-                <div className="flex flex-col gap-4 text-[12px]">
+                <div className="flex flex-col gap-4 text-[13px]">
                   <div>
-                    <span className="text-white/40 uppercase text-[9px] tracking-widest block mb-1">Status</span>
-                    <div className="p-2 bg-white/5 rounded-lg border border-white/10 flex justify-between items-center cursor-pointer">
-                      {selectedFile.status} <ArrowRight className="w-3 h-3 text-white/40 rotate-90" />
+                    <span className="text-muted text-[12px] block mb-1">Status</span>
+                    <div className="p-2 bg-panel rounded-lg flex justify-between items-center cursor-pointer text-ink">
+                      {selectedFile.status} <ArrowRight className="w-3 h-3 text-muted rotate-90" />
                     </div>
                   </div>
                   <div className="grid grid-cols-2 gap-4">
                     <div>
-                      <span className="text-white/40 uppercase text-[9px] tracking-widest block mb-1">Size</span>
-                      <span className="font-mono text-[#DBCBC2]/80">{selectedFile.size || "--"}</span>
+                      <span className="text-muted text-[12px] block mb-1">Size</span>
+                      <span className="text-ink/80">{selectedFile.size || "--"}</span>
                     </div>
                     <div>
-                      <span className="text-white/40 uppercase text-[9px] tracking-widest block mb-1">Type</span>
-                      <span className="font-mono text-[#DBCBC2]/80 uppercase">{selectedFile.extension || "Folder"}</span>
+                      <span className="text-muted text-[12px] block mb-1">Type</span>
+                      <span className="text-ink/80 uppercase">{selectedFile.extension || "Folder"}</span>
                     </div>
                     <div>
-                      <span className="text-white/40 uppercase text-[9px] tracking-widest block mb-1">Created</span>
-                      <span className="font-mono text-[#DBCBC2]/80">{selectedFile.created}</span>
+                      <span className="text-muted text-[12px] block mb-1">Created</span>
+                      <span className="text-ink/80">{selectedFile.created}</span>
                     </div>
                     <div>
-                      <span className="text-white/40 uppercase text-[9px] tracking-widest block mb-1">Owner</span>
-                      <span className="text-[#DBCBC2]/80">{selectedFile.owner}</span>
+                      <span className="text-muted text-[12px] block mb-1">Owner</span>
+                      <span className="text-ink/80">{selectedFile.owner}</span>
                     </div>
                   </div>
                   <div className="mt-2">
-                    <span className="text-white/40 uppercase text-[9px] tracking-widest block mb-2">Access Control</span>
+                    <span className="text-muted text-[12px] block mb-2">Access Control</span>
                     <div className="flex flex-col gap-2">
                       {selectedFile.access.map((a) => (
-                        <div key={a} className="flex items-center justify-between text-[11px] bg-white/5 px-2 py-1.5 rounded">
+                        <div key={a} className="flex items-center justify-between text-[12.5px] text-ink/80 bg-panel px-2 py-1.5 rounded-lg">
                           {a}{" "}
-                          <button className="text-red-400/50 hover:text-red-400">
+                          <button onClick={() => removeAccess(a)} className="text-muted hover:text-ink">
                             <X className="w-3 h-3" />
                           </button>
                         </div>
                       ))}
-                      <button className="text-left text-[#D85E25] text-[10px] uppercase font-mono tracking-widest hover:underline">+ Invite</button>
+                      {isAddingAccess ? (
+                        <div className="flex items-center gap-2">
+                          <input
+                            autoFocus
+                            type="text"
+                            value={newAccessVal}
+                            onChange={(e) => setNewAccessVal(e.target.value)}
+                            onKeyDown={(e) => {
+                              if (e.key === "Enter") handleAddAccess();
+                              if (e.key === "Escape") {
+                                setIsAddingAccess(false);
+                                setNewAccessVal("");
+                              }
+                            }}
+                            placeholder="Name or email"
+                            className="flex-1 bg-paper border border-line rounded-lg px-2 py-1 text-[12px] text-ink outline-none focus:border-primary/50"
+                          />
+                          <button onClick={handleAddAccess} className="text-primary text-[12px] hover:underline shrink-0">
+                            Add
+                          </button>
+                        </div>
+                      ) : (
+                        <button onClick={() => setIsAddingAccess(true)} className="text-left text-primary text-[12px] hover:underline">
+                          + Invite
+                        </button>
+                      )}
                     </div>
                   </div>
                 </div>
@@ -994,15 +1249,27 @@ export function FileVaultApp({
               {activeTab === "versions" && (
                 <div className="flex flex-col gap-4">
                   {selectedFile.versions.length === 0 ? (
-                    <p className="text-[11px] text-white/40 font-mono">No version history available.</p>
+                    <p className="text-[12.5px] text-muted">No version history available.</p>
                   ) : (
-                    <div className="flex flex-col relative before:absolute before:left-[11px] before:top-2 before:bottom-0 before:w-px before:bg-white/10">
-                      <div className="flex justify-end mb-4">
+                    <div className="flex flex-col relative before:absolute before:left-[11px] before:top-2 before:bottom-0 before:w-px before:bg-line">
+                      <div className="flex justify-between items-center mb-4 relative z-10">
+                        <label className="flex items-center gap-1.5 px-3 py-1.5 rounded-full text-[12px] font-medium bg-panel text-ink/70 hover:bg-chip hover:text-ink cursor-pointer transition-all">
+                          <Upload className="w-3 h-3" /> New Version
+                          <input
+                            type="file"
+                            className="hidden"
+                            onChange={(e) => {
+                              const f = e.target.files?.[0];
+                              if (f) handleVersionUpload(f);
+                              e.target.value = "";
+                            }}
+                          />
+                        </label>
                         <button
                           onClick={() => setIsComparing(true)}
                           disabled={selectedVersionsToCompare.length !== 2}
-                          className={`px-3 py-1.5 rounded-lg text-[10px] uppercase font-mono tracking-widest transition-all ${
-                            selectedVersionsToCompare.length === 2 ? "bg-[#D85E25] text-white hover:bg-[#D85E25]/80" : "bg-white/5 text-white/40 cursor-not-allowed"
+                          className={`px-3 py-1.5 rounded-full text-[12px] font-medium transition-all ${
+                            selectedVersionsToCompare.length === 2 ? "bg-primary text-white hover:bg-primary/85" : "bg-panel text-muted cursor-not-allowed"
                           }`}
                         >
                           Compare Selected
@@ -1010,19 +1277,19 @@ export function FileVaultApp({
                       </div>
                       {selectedFile.versions.map((ver, idx) => (
                         <div key={idx} className="flex gap-4 relative mb-6 last:mb-0">
-                          <div className={`w-6 h-6 shrink-0 rounded-full flex items-center justify-center border-4 border-[#050505] relative z-10 ${ver.latest ? "bg-[#D85E25]" : "bg-white/20"}`}>
+                          <div className={`w-6 h-6 shrink-0 rounded-full flex items-center justify-center border-4 border-paper relative z-10 ${ver.latest ? "bg-primary" : "bg-line"}`}>
                             {ver.latest && <CheckCircle className="w-3 h-3 text-white" />}
                           </div>
                           <div className="pt-1 w-full">
                             <div className="flex items-center justify-between mb-1">
                               <div className="flex items-center gap-2">
-                                <span className="text-[13px] font-medium leading-none">{ver.version}</span>
-                                {ver.latest && <span className="text-[8px] uppercase tracking-widest bg-[#D85E25]/20 text-[#D85E25] px-1.5 py-0.5 rounded">Latest</span>}
+                                <span className="text-[13.5px] font-medium text-ink leading-none">{ver.version}</span>
+                                {ver.latest && <span className="text-[10px] font-medium bg-primary/10 text-primary px-1.5 py-0.5 rounded-full">Latest</span>}
                               </div>
                               <label className="flex items-center gap-1.5 cursor-pointer">
                                 <input
                                   type="checkbox"
-                                  className="w-3 h-3 accent-[#D85E25] bg-black border border-white/20 rounded cursor-pointer"
+                                  className="w-3 h-3 accent-primary rounded cursor-pointer"
                                   onChange={(e) => {
                                     if (e.target.checked) {
                                       if (selectedVersionsToCompare.length < 2) setSelectedVersionsToCompare([...selectedVersionsToCompare, ver.version]);
@@ -1033,20 +1300,26 @@ export function FileVaultApp({
                                   checked={selectedVersionsToCompare.includes(ver.version)}
                                   disabled={!selectedVersionsToCompare.includes(ver.version) && selectedVersionsToCompare.length >= 2}
                                 />
-                                <span className="text-[9px] uppercase tracking-widest font-mono text-white/60 select-none">Compare</span>
+                                <span className="text-[11px] text-muted select-none">Compare</span>
                               </label>
                             </div>
-                            <p className="text-[10px] font-mono text-white/40 mb-2">
+                            <p className="text-[12px] text-muted mb-2">
                               {ver.date} • {ver.author}
                             </p>
                             {!ver.latest && (
                               <div className="flex gap-2">
-                                <button onClick={() => showToast("Restored version " + ver.version)} className="text-[9px] uppercase tracking-widest font-mono text-white/60 hover:text-white bg-white/10 px-2 py-1 rounded">
+                                <button
+                                  onClick={() => restoreVersion(ver.version)}
+                                  className="text-[11px] font-medium text-ink/70 hover:text-ink bg-panel px-2 py-1 rounded-full"
+                                >
                                   Restore
                                 </button>
-                                <button onClick={() => showToast("Downloading version " + ver.version)} className="text-[9px] uppercase tracking-widest font-mono text-white/60 hover:text-white bg-white/10 px-2 py-1 rounded">
+                                <a
+                                  href={`/api/files/${selectedFile.id}/version/${encodeURIComponent(ver.version)}/download`}
+                                  className="text-[11px] font-medium text-ink/70 hover:text-ink bg-panel px-2 py-1 rounded-full"
+                                >
                                   Download
-                                </button>
+                                </a>
                               </div>
                             )}
                           </div>
@@ -1054,46 +1327,75 @@ export function FileVaultApp({
                       ))}
                     </div>
                   )}
-                  <button
-                    onClick={() => showToast("Upload feature coming soon")}
-                    className="w-full mt-4 bg-white/5 hover:bg-white/10 border border-white/10 py-2 rounded-lg text-[10px] uppercase font-mono tracking-widest transition-colors flex items-center justify-center gap-2"
-                  >
-                    <Upload className="w-3 h-3" /> Upload New Version
-                  </button>
                 </div>
               )}
 
               {activeTab === "links" && (
-                <div className="flex flex-col gap-5 text-[12px]">
+                <div className="flex flex-col gap-5 text-[13px]">
                   <div>
-                    <span className="flex items-center gap-1.5 text-white/40 uppercase text-[9px] tracking-widest mb-2">
+                    <span className="flex items-center gap-1.5 text-muted text-[12px] mb-2">
                       <Folder className="w-3 h-3" /> Linked Project
                     </span>
-                    <div className="p-2.5 bg-white/5 rounded-lg border border-white/10 flex items-center justify-between">
-                      <span>{selectedFile.projectId ? `Project #${selectedFile.projectId}` : "--"}</span>
-                      <button className="text-white/40 hover:text-white">
-                        <LinkIcon className="w-3 h-3" />
-                      </button>
-                    </div>
+                    {editingLink === "project" ? (
+                      <select
+                        autoFocus
+                        defaultValue={selectedFile.projectId ?? ""}
+                        onChange={(e) => {
+                          setFileLink({ projectId: e.target.value ? Number(e.target.value) : null });
+                          setEditingLink(null);
+                        }}
+                        onBlur={() => setEditingLink(null)}
+                        className="w-full p-2.5 bg-panel rounded-lg text-ink outline-none border border-primary/40"
+                      >
+                        <option value="">-- None --</option>
+                        {projects.map((p) => (
+                          <option key={p.id} value={Number(p.id.replace(/^p/, ""))}>
+                            {p.name}
+                          </option>
+                        ))}
+                      </select>
+                    ) : (
+                      <div className="p-2.5 bg-panel rounded-lg flex items-center justify-between text-ink">
+                        <span>
+                          {selectedFile.projectId
+                            ? projects.find((p) => Number(p.id.replace(/^p/, "")) === selectedFile.projectId)?.name ??
+                              `Project #${selectedFile.projectId}`
+                            : "--"}
+                        </span>
+                        <button onClick={() => setEditingLink("project")} className="text-muted hover:text-ink">
+                          <LinkIcon className="w-3 h-3" />
+                        </button>
+                      </div>
+                    )}
                   </div>
                   <div>
-                    <span className="flex items-center gap-1.5 text-white/40 uppercase text-[9px] tracking-widest mb-2">
+                    <span className="flex items-center gap-1.5 text-muted text-[12px] mb-2">
                       <Users className="w-3 h-3" /> Linked Client
                     </span>
-                    <div className="p-2.5 bg-white/5 rounded-lg border border-white/10 flex items-center justify-between">
-                      <span>{selectedFile.clientId || "--"}</span>
-                      <button className="text-white/40 hover:text-white">
-                        <LinkIcon className="w-3 h-3" />
-                      </button>
-                    </div>
-                  </div>
-                  <div>
-                    <span className="flex items-center gap-1.5 text-white/40 uppercase text-[9px] tracking-widest mb-2">
-                      <CheckCircle className="w-3 h-3" /> Deliverable
-                    </span>
-                    <button className="w-full text-left p-2.5 bg-white/5 border border-dashed border-white/20 text-white/40 hover:text-white hover:border-white/50 rounded-lg text-[11px] transition-colors">
-                      + Connect to Task/Deliverable
-                    </button>
+                    {editingLink === "client" ? (
+                      <input
+                        autoFocus
+                        type="text"
+                        defaultValue={selectedFile.clientId ?? ""}
+                        onKeyDown={(e) => {
+                          if (e.key === "Enter") e.currentTarget.blur();
+                          if (e.key === "Escape") setEditingLink(null);
+                        }}
+                        onBlur={(e) => {
+                          setFileLink({ clientId: e.target.value.trim() || null });
+                          setEditingLink(null);
+                        }}
+                        placeholder="Client name"
+                        className="w-full p-2.5 bg-panel rounded-lg text-ink outline-none border border-primary/40"
+                      />
+                    ) : (
+                      <div className="p-2.5 bg-panel rounded-lg flex items-center justify-between text-ink">
+                        <span>{selectedFile.clientId || "--"}</span>
+                        <button onClick={() => setEditingLink("client")} className="text-muted hover:text-ink">
+                          <LinkIcon className="w-3 h-3" />
+                        </button>
+                      </div>
+                    )}
                   </div>
                 </div>
               )}
@@ -1103,18 +1405,16 @@ export function FileVaultApp({
                   <div className="flex-1 overflow-y-auto pr-2 pb-20 max-h-[300px] flex flex-col gap-4">
                     {aiChatResponses.length === 0 && (
                       <div className="text-center p-4">
-                        <Sparkles className="w-8 h-8 text-[#34A853]/50 mx-auto mb-3" />
-                        <p className="text-[12px] text-white/50 mb-1">Ask AI about this file</p>
-                        <p className="text-[10px] text-white/30">Generate summaries, extract action items, or ask questions.</p>
+                        <Sparkles className="w-8 h-8 text-moss/50 mx-auto mb-3" />
+                        <p className="text-[13px] text-ink/70 mb-1">Ask AI about this file</p>
+                        <p className="text-[12px] text-muted">Generate summaries, extract action items, or ask questions.</p>
                       </div>
                     )}
                     {aiChatResponses.map((msg, idx) => (
                       <div key={idx} className={`flex flex-col ${msg.role === "user" ? "items-end" : "items-start"}`}>
                         <div
-                          className={`px-3 py-2 rounded-xl text-[12px] max-w-[90%] whitespace-pre-wrap ${
-                            msg.role === "user"
-                              ? "bg-white/10 text-white rounded-br-none"
-                              : "bg-[#34A853]/20 text-[#DBCBC2] rounded-bl-none border border-[#34A853]/20"
+                          className={`px-3 py-2 rounded-xl text-[13px] max-w-[90%] whitespace-pre-wrap ${
+                            msg.role === "user" ? "bg-ink text-paper rounded-br-none" : "bg-moss/10 text-ink rounded-bl-none"
                           }`}
                         >
                           {msg.text}
@@ -1123,13 +1423,13 @@ export function FileVaultApp({
                     ))}
                     {isAiLoading && (
                       <div className="flex items-start">
-                        <div className="px-3 py-2 rounded-xl text-[12px] bg-[#34A853]/10 text-white/50 rounded-bl-none border border-[#34A853]/10">
+                        <div className="px-3 py-2 rounded-xl text-[13px] bg-moss/10 text-muted rounded-bl-none">
                           <Sparkles className="w-3 h-3 animate-pulse" />
                         </div>
                       </div>
                     )}
                   </div>
-                  <div className="absolute bottom-0 inset-x-0 bg-[#0A0A0A] pt-2 border-t border-white/5">
+                  <div className="absolute bottom-0 inset-x-0 bg-paper pt-2 border-t border-line">
                     <input
                       type="text"
                       placeholder="Ask anything..."
@@ -1138,7 +1438,7 @@ export function FileVaultApp({
                       onKeyDown={(e) => {
                         if (e.key === "Enter" && aiChatInput.trim() && !isAiLoading) sendFileChat(aiChatInput.trim());
                       }}
-                      className="w-full bg-white/[0.02] border border-white/10 rounded-lg px-3 py-2.5 text-[12px] text-white focus:outline-none focus:border-[#34A853]/50 focus:bg-white/[0.05] transition-all"
+                      className="w-full bg-panel border border-transparent rounded-lg px-3 py-2.5 text-[13px] text-ink focus:outline-none focus:border-moss/50 transition-all"
                     />
                   </div>
                 </div>
@@ -1154,14 +1454,14 @@ export function FileVaultApp({
             initial={{ opacity: 0 }}
             animate={{ opacity: 1 }}
             exit={{ opacity: 0 }}
-            className="absolute inset-0 bg-black/80 backdrop-blur-sm z-[60] flex flex-col p-8 rounded-xl overflow-hidden"
+            className="absolute inset-0 bg-ink z-[60] flex flex-col p-8 rounded-xl overflow-hidden"
           >
             <div className="flex justify-between items-center mb-8 shrink-0">
-              <div className="flex items-center gap-4">
+              <div className="flex items-center gap-4 text-paper">
                 {getFileIcon(previewingFile)}
                 <div>
-                  <h2 className="text-[#EBE6DD] font-display text-[24px] uppercase tracking-wide leading-none mb-1">{previewingFile.name}</h2>
-                  <span className="text-white/40 text-[11px] font-mono uppercase tracking-widest">
+                  <h2 className="text-paper text-[22px] font-semibold leading-none mb-1">{previewingFile.name}</h2>
+                  <span className="text-paper/50 text-[12px]">
                     {previewingFile.size || "--"} • {previewingFile.extension?.toUpperCase() || "FILE"}
                   </span>
                 </div>
@@ -1169,39 +1469,49 @@ export function FileVaultApp({
               <div className="flex items-center gap-3">
                 <button
                   onClick={(e) => handlePreviewNewWindow(previewingFile, e)}
-                  className="px-4 py-2 bg-white/10 hover:bg-white/20 rounded-full text-[11px] font-medium tracking-widest uppercase transition-colors flex items-center gap-2"
+                  className="px-4 py-2 bg-paper/10 hover:bg-paper/20 text-paper rounded-full text-[12.5px] font-medium transition-colors flex items-center gap-2"
                 >
                   <Maximize className="w-3.5 h-3.5" /> Open Native Window
                 </button>
                 <button
                   onClick={(e) => handleShareLink(previewingFile, e)}
-                  className="px-4 py-2 bg-white/10 hover:bg-white/20 rounded-full text-[11px] font-medium tracking-widest uppercase transition-colors flex items-center gap-2"
+                  className="px-4 py-2 bg-paper/10 hover:bg-paper/20 text-paper rounded-full text-[12.5px] font-medium transition-colors flex items-center gap-2"
                 >
                   <LinkIcon className="w-3.5 h-3.5" /> Copy Link
                 </button>
                 <button
                   onClick={() => setPreviewingFile(null)}
-                  className="w-10 h-10 bg-white/10 hover:bg-red-500/20 text-white/50 hover:text-red-400 rounded-full flex items-center justify-center transition-colors"
+                  className="w-10 h-10 bg-paper/10 hover:bg-paper/20 text-paper/70 hover:text-paper rounded-full flex items-center justify-center transition-colors"
                 >
                   <X className="w-5 h-5" />
                 </button>
               </div>
             </div>
-            <div className="flex-1 bg-black/40 border border-white/10 rounded-2xl flex items-center justify-center overflow-hidden relative">
-              {previewingFile.extension === "fig" ? (
+            <div className="flex-1 bg-black/25 rounded-2xl flex items-center justify-center overflow-hidden relative">
+              {previewableKind(previewingFile) === "image" ? (
+                <img src={contentUrl(previewingFile)} alt={previewingFile.name} className="max-w-full max-h-full object-contain" />
+              ) : previewableKind(previewingFile) === "pdf" ? (
+                <iframe src={contentUrl(previewingFile)} title={previewingFile.name} className="w-full h-full border-0 bg-white" />
+              ) : previewableKind(previewingFile) === "video" ? (
+                <video src={contentUrl(previewingFile)} controls className="max-w-full max-h-full">
+                  <track kind="captions" />
+                </video>
+              ) : previewingFile.extension === "fig" ? (
                 <div className="text-center">
-                  <Figma className="w-16 h-16 text-white/50 mx-auto mb-4" />
-                  <p className="text-white/40 font-mono text-[12px] uppercase tracking-widest">Figma Preview Embedded Here</p>
+                  <Figma className="w-16 h-16 text-paper/40 mx-auto mb-4" />
+                  <p className="text-paper/40 text-[13px]">Figma Preview Embedded Here</p>
                 </div>
               ) : previewingFile.extension === "pdf" ? (
                 <div className="text-center">
-                  <FileText className="w-16 h-16 text-white/50 mx-auto mb-4" />
-                  <p className="text-white/40 font-mono text-[12px] uppercase tracking-widest">PDF Viewer Embedded Here</p>
+                  <FileText className="w-16 h-16 text-paper/40 mx-auto mb-4" />
+                  <p className="text-paper/40 text-[13px]">No stored content — upload a version to preview</p>
                 </div>
               ) : (
                 <div className="text-center">
-                  <Eye className="w-16 h-16 text-white/20 mx-auto mb-4" />
-                  <p className="text-white/40 font-mono text-[12px] uppercase tracking-widest">Generic File Viewer Embedded Here</p>
+                  <Eye className="w-16 h-16 text-paper/25 mx-auto mb-4" />
+                  <p className="text-paper/40 text-[13px]">
+                    {previewingFile.hasContent ? `${(previewingFile.extension || "FILE").toUpperCase()} has no in-browser preview` : "No stored content to preview"}
+                  </p>
                 </div>
               )}
             </div>

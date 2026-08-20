@@ -13,11 +13,12 @@ export function Toast({ message, onClose }: { message: string | null; onClose: (
     <AnimatePresence>
       {message && (
         <motion.div
-          initial={{ opacity: 0, y: 50, scale: 0.9 }}
+          initial={{ opacity: 0, y: 20, scale: 0.96 }}
           animate={{ opacity: 1, y: 0, scale: 1 }}
-          exit={{ opacity: 0, y: 20, scale: 0.9 }}
-          className="fixed bottom-24 left-1/2 -translate-x-1/2 z-[100] bg-[#D85E25] text-white px-6 py-3 rounded-full text-[12px] font-mono tracking-widest uppercase shadow-2xl border border-white/20"
+          exit={{ opacity: 0, y: 12, scale: 0.96 }}
+          className="fixed bottom-8 left-1/2 -translate-x-1/2 z-[100] flex items-center gap-2.5 bg-ink text-paper pl-3.5 pr-4 py-2.5 rounded-full text-[13px] shadow-lg"
         >
+          <span className="w-1.5 h-1.5 rounded-full bg-primary shrink-0" aria-hidden />
           {message}
         </motion.div>
       )}

@@ -1,17 +1,50 @@
-@import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600&family=Space+Grotesk:wght@300;400;500&display=swap');
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap');
+@import url('https://fonts.googleapis.com/css2?family=Newsreader:ital,wght@0,400;0,500;1,400;1,500&display=swap');
 @import "tailwindcss";
+
+/* Artific — kept available for the wordmark only. */
+@font-face {
+  font-family: "Artific";
+  src: url("/fonts/Artific-Variable.ttf") format("truetype-variations");
+  font-weight: 100 900;
+  font-style: normal;
+  font-display: swap;
+}
 
 @theme {
   --font-sans: "Inter", ui-sans-serif, system-ui, sans-serif;
-  --font-display: "Space Grotesk", "Inter", ui-sans-serif, system-ui, sans-serif;
-  
-  --color-primary: #D85E25;
+  --font-display: "Inter", ui-sans-serif, system-ui, sans-serif;
+  --font-wordmark: "Artific", "Inter", ui-sans-serif, sans-serif;
+  --font-serif: "Newsreader", "Inter", ui-serif, serif;
+
+  /* Cool neutrals, white-dominant — flat grey canvas with white cards raised
+     on shadow rather than color-fill layering (macOS Finder / Sequoia). Same
+     paper < panel < chip lightness ordering as before, just re-hued from warm
+     cream to cool grey, and compressed toward white so surface/panel read as
+     "elevated white" rather than a separate color step. */
+  --color-paper: #f5f5f7;
+  --color-panel: #ffffff;
+  --color-surface: #ffffff;
+  --color-chip: #eeeef1;
+  --color-ink: #1d1d1f;
+  --color-line: #e5e5ea;
+  --color-muted: #86868b;
+
+  /* Monochrome accent + status ramp — a monotonic gray scale (~15 lightness
+     points per step) so status pills stay distinguishable without hue.
+     primary = darkest "action" tone; moss < slate < amber step lighter in
+     that order (moss = positive/settled, amber = needs-attention/lightest). */
+  --color-primary: #2c2c2e;
+  --color-moss: #3a3a3c;
+  --color-slate: #525254;
+  --color-amber: #6e6e73;
+
   --color-background-dark: #0a0a0a;
 }
 
 body {
-  background-color: #1a0c14;
-  color: #ffffff;
+  background-color: var(--color-paper);
+  color: var(--color-ink);
   font-family: var(--font-sans);
   font-weight: 400;
   letter-spacing: -0.006em;
@@ -22,17 +55,8 @@ body {
   text-rendering: optimizeLegibility;
 }
 
-/* Solid base. The app defaults to light mode, whose invert(1) filter renders
-   this as solid white with all UI colors flipped to their dark counterparts. */
+/* Flat grey canvas — no texture. Depth comes from shadowed white cards, not a
+   background pattern. */
 .mesh-bg {
-  background: #000000;
-}
-
-.glass-noise {
-  position: absolute;
-  inset: 0;
-  background-image: url("data:image/svg+xml,%3Csvg viewBox='0 0 400 400' xmlns='http://www.w3.org/2000/svg'%3E%3Cfilter id='noiseFilter'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='1.5' numOctaves='3' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23noiseFilter)'/%3E%3C/svg%3E");
-  opacity: 0.12;
-  mix-blend-mode: overlay;
-  pointer-events: none;
+  background-color: var(--color-paper);
 }
