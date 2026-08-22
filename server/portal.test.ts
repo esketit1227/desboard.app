@@ -144,9 +144,9 @@ describe("portal DTOs — the field allowlist", () => {
     expect(json).not.toContain("h1"); // no internal handover id
   });
 
-  it("file DTO excludes owner, source, versions, access and project linkage", () => {
+  it("file DTO excludes owner, source, access and project linkage, but includes versions for the picker", () => {
     const dto = toPortalFileDTO(file);
-    expect(Object.keys(dto).sort()).toEqual(["extension", "id", "name", "size", "status", "tags", "type"].sort());
+    expect(Object.keys(dto).sort()).toEqual(["extension", "id", "name", "size", "status", "tags", "type", "versions"].sort());
     const json = JSON.stringify(dto);
     expect(json).not.toContain("Design Team"); // owner
     expect(json).not.toContain("Figma"); // provider/source
@@ -165,7 +165,9 @@ describe("portal DTOs — the field allowlist", () => {
       internalOnly: false,
     };
     const dto = toPortalCommentDTO(c);
-    expect(Object.keys(dto).sort()).toEqual(["author", "body", "created", "fileId", "id", "role", "x", "y"].sort());
+    expect(Object.keys(dto).sort()).toEqual(
+      ["author", "body", "created", "fileId", "id", "role", "timecode", "version", "x", "y"].sort()
+    );
     expect(JSON.stringify(dto)).not.toContain("handoverId");
   });
 

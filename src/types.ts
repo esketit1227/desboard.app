@@ -38,8 +38,12 @@ export interface VaultFile {
   mime?: string;
   /** True when Desboard holds the file's actual bytes (real preview/download). */
   hasContent?: boolean;
+  /** Raw byte count of the current version's content, for storage-quota accounting — `size` above is a display-formatted string ("8.3 MB"), not usable for that math. */
+  sizeBytes?: number;
   /** ISO timestamp of the last time `status` changed. Unset for files predating this column. */
   statusChangedAt?: string;
+  /** The folder (another VaultFile with type "folder") this item lives inside, or null/unset for the project's root. Real nesting, not just a label. */
+  parentId?: string | null;
 }
 
 export type ProjectStatus = "Planning" | "In Progress" | "Review" | "Archived";
@@ -149,6 +153,20 @@ export interface HandoverComment {
    */
   x?: number | null;
   y?: number | null;
+  /**
+   * A video pin's position, in seconds into playback. Mutually exclusive with
+   * x/y — a pin on a file is either a spot on an image or a moment in a video,
+   * never both. Only meaningful when `fileId` is set to a video file.
+   */
+  timecode?: number | null;
+  /**
+   * The file's version label at the moment this pin was left — lets a pin
+   * from an earlier round stay anchored to the version it was actually about,
+   * instead of silently relabeling itself onto whatever's now current. Unset
+   * on comments that predate this field, or that aren't tied to a specific
+   * file (general notes).
+   */
+  version?: string | null;
   /** ISO 8601 timestamp (used for ordering). */
   created: string;
   /** Studio-only note: never rendered on, or serialized to, the client portal. */
@@ -193,6 +211,8 @@ export interface PortalFileDTO {
   size?: string;
   status: FileStatus;
   tags: string[];
+  /** Full version history, oldest first — powers the portal's version picker so a client can review or compare a past round, not just the latest. */
+  versions: FileVersion[];
 }
 
 export interface PortalCommentDTO {
@@ -203,6 +223,8 @@ export interface PortalCommentDTO {
   fileId: string | null;
   x: number | null;
   y: number | null;
+  timecode: number | null;
+  version: string | null;
   created: string;
 }
 
@@ -436,6 +458,45 @@ export interface AuthUser {
   workspaceId: string;
   workspaceName: string;
   role: WorkspaceRole;
+}
+
+/**
+ * A workspace's subscription tier. 'trial' is the automatic state every new
+ * workspace starts in (no card required) — it isn't something a customer
+ * "buys," so there's no Stripe product/price for it.
+ */
+export type PlanTier = "trial" | "freelance" | "studio" | "enterprise";
+
+/** What a tier allows — `null` means uncapped. Never `Infinity`: it doesn't survive JSON (`JSON.stringify({n: Infinity})` silently becomes `{"n":null}`), so `null` is the one true "uncapped" value everywhere this crosses the API boundary. */
+export interface PlanLimits {
+  seatCap: number | null;
+  storageCapBytes: number | null;
+  activeHandoverCap: number | null;
+  folderNesting: boolean;
+  bulkActions: boolean;
+  multiUpload: boolean;
+  ai: boolean;
+}
+
+/** Payload of GET /api/billing/status — a workspace's current plan, entitlements, and live usage against them. */
+export interface BillingStatus {
+  tier: PlanTier;
+  /** True when there's no active entitlement at all (trial expired, or subscription canceled) — BillingGate shows the blocked screen. */
+  blocked: boolean;
+  trialEndsAt: string | null;
+  subscriptionStatus: string | null;
+  planInterval: "month" | "year" | null;
+  seats: number;
+  cancelAtPeriodEnd: boolean;
+  currentPeriodEnd: string | null;
+  /** Whether this workspace has ever completed a checkout — gates whether Settings shows "Manage billing" vs. upgrade CTAs. */
+  hasStripeCustomer: boolean;
+  limits: PlanLimits;
+  usage: {
+    storageBytes: number;
+    activeHandovers: number;
+    members: number;
+  };
 }
 
 /** A signed-in member of the current workspace, for the Settings "Team" list. */

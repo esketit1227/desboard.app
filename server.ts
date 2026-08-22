@@ -28,6 +28,7 @@ import {
   getFiles,
   createFile,
   updateFile,
+  deleteFile,
   getProjects,
   createProject,
   getTags,
@@ -79,23 +80,30 @@ import {
   getMessages,
   addMessage,
   deleteMessage,
+  getEffectiveTier,
+  getWorkspaceStorageBytes,
+  getActiveHandoverCount,
 } from "./db.ts";
+import { wouldExceedStorage, wouldExceedHandoverCap } from "./server/billingCore.ts";
 import type { DashboardData, Handover, VaultFile } from "./src/types.ts";
 import { createPortalRouter } from "./server/portal.ts";
 import { createOAuthRouter } from "./server/oauth.ts";
 import { createSsoRouter } from "./server/sso.ts";
 import { createTeamRouter, createInviteAcceptRouter } from "./server/invites.ts";
+import { createBillingRouter, createBillingWebhookRouter, requireActivePlan } from "./server/billing.ts";
 import { sendEmail, reminderEmailHtml, emailConfigured } from "./server/email.ts";
 import { createAuthRouter, requireAuth, type AuthedRequest } from "./server/auth.ts";
 import { hashPassword } from "./server/portalCore.ts";
 import {
   formatBytes,
   readContentStream,
+  streamContentWithRange,
   writeContent,
   writeVersionContent,
   hasVersionContent,
   readVersionContentStream,
   restoreVersionContent,
+  deleteContent,
 } from "./server/storage.ts";
 
 const CHAT_MODEL = "claude-sonnet-4-6"; // File & Project Copilot + upload analysis
@@ -202,9 +210,56 @@ function workspaceOf(req: AuthedRequest): string {
   return req.auth!.workspaceId;
 }
 
+/**
+ * Shared storage-quota check for every site that writes file bytes (direct
+ * upload, a new version, and server/oauth.ts's Drive/Dropbox/OneDrive
+ * import) — computed from the base64 payload BEFORE anything is written, so
+ * a workspace over its cap never gets bytes on disk it shouldn't have.
+ *
+ * `replacingBytes` matters for new-version uploads specifically: the file's
+ * CURRENT size_bytes is already counted in getWorkspaceStorageBytes()'s sum
+ * (size_bytes tracks only the latest version), and this upload is about to
+ * replace it, not add alongside it — pass the file's existing sizeBytes so
+ * it's subtracted first, or a brand-new file would otherwise be double-
+ * penalized for space its old version is only occupying for a moment longer.
+ */
+function storageQuotaError(workspaceId: string, base64Content: string, replacingBytes = 0): { error: string } | null {
+  const incomingBytes = Buffer.byteLength(base64Content, "base64");
+  const { limits } = getEffectiveTier(workspaceId);
+  const usedBytes = Math.max(0, getWorkspaceStorageBytes(workspaceId) - replacingBytes);
+  if (!wouldExceedStorage(usedBytes, incomingBytes, limits.storageCapBytes)) return null;
+  return { error: "This upload would put you over your plan's storage limit. Free up space or upgrade your plan." };
+}
+
+/**
+ * A folder placed inside another folder is a Studio+ feature. Plain files
+ * filed into a (top-level) folder are unrestricted on every tier — only the
+ * item being placed is itself a folder does this gate apply, so a lower-tier
+ * workspace still gets one usable level of folders, just not folder-in-folder.
+ */
+function folderNestingError(
+  workspaceId: string,
+  itemType: string | undefined,
+  parentId: string | null | undefined
+): { error: string } | null {
+  if (parentId == null) return null;
+  if (itemType !== "folder") return null;
+  const { limits } = getEffectiveTier(workspaceId);
+  if (limits.folderNesting) return null;
+  return { error: "Nested folders are a Studio-plan feature. Upgrade to organize folders this way." };
+}
+
 async function startServer() {
   const app = express();
   const PORT = Number(process.env.PORT) || 3000;
+
+  // Stripe webhook signature verification needs the raw, unparsed request
+  // body — it MUST be mounted before the global express.json() below, or by
+  // the time its handler runs the body has already been consumed and
+  // parsed, and signature verification can never succeed. See the long
+  // comment on the route itself in server/billing.ts for the full story.
+  app.use(createBillingWebhookRouter());
+
   app.use(express.json({ limit: "50mb" }));
   // Apple's Sign in with Apple callback uses response_mode=form_post — a
   // real application/x-www-form-urlencoded POST body, not JSON.
@@ -248,6 +303,14 @@ async function startServer() {
   // Everything registered from here on is internal, workspace-scoped API and
   // requires a signed-in studio session.
   app.use("/api", requireAuth);
+
+  // Billing must stay reachable even when a workspace is blocked (trial
+  // expired, subscription canceled) — it's how an owner reaches
+  // checkout/the billing portal to unblock it. Mounted before
+  // requireActivePlan below, which gates everything after it.
+  app.use(createBillingRouter());
+  app.use("/api", requireActivePlan);
+
   app.use(createTeamRouter());
 
   // =========================================================================
@@ -262,16 +325,22 @@ async function startServer() {
   // disk so the file gets real previews and downloads.
   app.post("/api/files", (req: AuthedRequest, res) => {
     try {
+      const workspaceId = workspaceOf(req);
       const { content, mimeType, ...file } = req.body as VaultFile & { content?: string; mimeType?: string };
+      const nestingError = folderNestingError(workspaceId, file.type, file.parentId);
+      if (nestingError) return res.status(402).json(nestingError);
       if (typeof content === "string" && content.length > 0) {
+        const quotaError = storageQuotaError(workspaceId, content);
+        if (quotaError) return res.status(402).json(quotaError);
         const bytes = writeContent(file.id, content);
         const initialVersion = file.versions?.[0]?.version || "v1.0";
         writeVersionContent(file.id, initialVersion, content);
         file.hasContent = true;
         file.mime = mimeType || "application/octet-stream";
         file.size = formatBytes(bytes);
+        file.sizeBytes = bytes;
       }
-      const created = createFile(file, workspaceOf(req));
+      const created = createFile(file, workspaceId);
       res.status(201).json(created);
     } catch (e: any) {
       res.status(400).json({ error: e.message || "Failed to create file" });
@@ -279,18 +348,38 @@ async function startServer() {
   });
 
   app.patch("/api/files/:id", (req: AuthedRequest, res) => {
-    const updated = updateFile(req.params.id, req.body, workspaceOf(req));
+    const workspaceId = workspaceOf(req);
+    const patch = req.body as Partial<VaultFile>;
+    // Only checked when the patch actually tries to set a real parent (most
+    // patches — status changes, tag edits, project links — don't touch
+    // parentId at all, and shouldn't be gated just because they arrived in
+    // the same route).
+    if ("parentId" in patch) {
+      const itemType = patch.type ?? getFileById(req.params.id, workspaceId)?.type;
+      const nestingError = folderNestingError(workspaceId, itemType, patch.parentId);
+      if (nestingError) return res.status(402).json(nestingError);
+    }
+    const updated = updateFile(req.params.id, patch, workspaceId);
     if (!updated) return res.status(404).json({ error: "File not found" });
     res.json(updated);
   });
 
-  /** Inline stream of a file's stored bytes — powers real previews. */
+  /** Deleting a folder never destroys its contents — see deleteFile's own doc comment. */
+  app.delete("/api/files/:id", (req: AuthedRequest, res) => {
+    const workspaceId = workspaceOf(req);
+    const file = getFileById(req.params.id, workspaceId);
+    if (!file) return res.status(404).json({ error: "File not found" });
+    const ok = deleteFile(req.params.id, workspaceId);
+    if (!ok) return res.status(404).json({ error: "File not found" });
+    if (file.hasContent) deleteContent(file.id);
+    res.status(204).end();
+  });
+
+  /** Inline stream of a file's stored bytes — powers real previews, range-aware so video can be scrubbed. */
   app.get("/api/files/:id/content", (req: AuthedRequest, res) => {
     const file = getFileById(req.params.id, workspaceOf(req));
     if (!file || !file.hasContent) return res.status(404).json({ error: "No stored content for this file" });
-    res.setHeader("Content-Type", file.mime || "application/octet-stream");
-    res.setHeader("Content-Disposition", "inline");
-    readContentStream(file.id).on("error", () => res.status(404).end()).pipe(res);
+    streamContentWithRange(req, res, file.id, file.mime || "application/octet-stream");
   });
 
   /** Studio-side download: the real bytes when stored, a delivery note otherwise. */
@@ -316,6 +405,8 @@ async function startServer() {
     if (!file) return res.status(404).json({ error: "File not found" });
     const { content, mimeType, author } = req.body as { content?: string; mimeType?: string; author?: string };
     if (!content) return res.status(400).json({ error: "Missing content" });
+    const quotaError = storageQuotaError(workspaceId, content, file.sizeBytes ?? 0);
+    if (quotaError) return res.status(402).json(quotaError);
     const bytes = writeContent(file.id, content);
     const versions = file.versions.map((v) => ({ ...v, latest: false }));
     const newLabel = `v${versions.length + 1}.0`;
@@ -328,7 +419,7 @@ async function startServer() {
     });
     const updated = updateFile(
       file.id,
-      { versions, hasContent: true, mime: mimeType || file.mime || "application/octet-stream", size: formatBytes(bytes) },
+      { versions, hasContent: true, mime: mimeType || file.mime || "application/octet-stream", size: formatBytes(bytes), sizeBytes: bytes },
       workspaceId
     );
     res.json(updated);
@@ -678,15 +769,40 @@ async function startServer() {
     res.json(getHandovers(workspaceOf(req), projectId));
   });
 
+  const ACTIVE_STATUSES = new Set<Handover["status"]>(["Sent", "Accepted"]);
+
+  /** Checked only on the transition INTO Sent/Accepted — re-saving an already-active handover, or one staying Draft, never trips this. */
+  function handoverCapError(workspaceId: string): { error: string } | null {
+    const { limits } = getEffectiveTier(workspaceId);
+    if (!wouldExceedHandoverCap(getActiveHandoverCount(workspaceId), limits.activeHandoverCap, true)) return null;
+    return {
+      error: `You've reached your plan's limit of ${limits.activeHandoverCap} active handover${limits.activeHandoverCap === 1 ? "" : "s"}. Upgrade to send more.`,
+    };
+  }
+
   app.post("/api/handovers", (req: AuthedRequest, res) => {
     try {
-      res.status(201).json(createHandover(req.body, workspaceOf(req)));
+      const workspaceId = workspaceOf(req);
+      const body = req.body as Partial<Handover>;
+      // A create payload can in principle arrive already Sent/Accepted (the
+      // studio UI always creates as Draft first, but nothing server-side
+      // should assume that) — a brand-new resource's "old" status is
+      // implicitly not-active, so this is always a becoming-active check.
+      if (body.status && ACTIVE_STATUSES.has(body.status)) {
+        const capError = handoverCapError(workspaceId);
+        if (capError) return res.status(402).json(capError);
+      }
+      res.status(201).json(createHandover(req.body, workspaceId));
     } catch (e: any) {
       res.status(400).json({ error: e.message || "Failed to create handover" });
     }
   });
 
   app.patch("/api/handovers/:id", (req: AuthedRequest, res) => {
+    const workspaceId = workspaceOf(req);
+    const existing = getHandoverById(req.params.id, workspaceId);
+    if (!existing) return res.status(404).json({ error: "Handover not found" });
+
     // Normalize the patch: the portal token is server-owned (never client-set),
     // and passwords arrive in plaintext from the studio UI and are hashed here.
     const { token: _ignored, password, ...rest } = req.body as Partial<Handover> & { password?: string };
@@ -697,7 +813,15 @@ async function startServer() {
     if (patch.accessMode && patch.accessMode !== "password") {
       patch.passwordHash = null;
     }
-    const updated = updateHandover(req.params.id, patch, workspaceOf(req));
+
+    const wasActive = ACTIVE_STATUSES.has(existing.status);
+    const willBeActive = ACTIVE_STATUSES.has(patch.status ?? existing.status);
+    if (!wasActive && willBeActive) {
+      const capError = handoverCapError(workspaceId);
+      if (capError) return res.status(402).json(capError);
+    }
+
+    const updated = updateHandover(req.params.id, patch, workspaceId);
     if (!updated) return res.status(404).json({ error: "Handover not found" });
     res.json(updated);
   });
@@ -796,13 +920,28 @@ async function startServer() {
    * back a ranked JSON array of matching file ids. Falls back to keyword matching
    * whenever the AI call is unavailable or fails.
    */
+  /**
+   * Whether AI features (search, copilot, chat, upload tagging) are actually
+   * live right now — bring-your-own-key, so a fresh instance has them off
+   * until ANTHROPIC_API_KEY is set. The UI uses this to say so upfront
+   * instead of quietly downgrading to keyword search with no explanation.
+   */
+  app.get("/api/ai/status", (_req: AuthedRequest, res) => {
+    res.json({ configured: !!anthropic });
+  });
+
   app.post("/api/search", aiLimiter, async (req: AuthedRequest, res) => {
+    const workspaceId = workspaceOf(req);
     const { query, files } = req.body as { query: string; files?: VaultFile[] };
-    const allFiles: VaultFile[] = Array.isArray(files) && files.length ? files : getFiles(workspaceOf(req));
+    const allFiles: VaultFile[] = Array.isArray(files) && files.length ? files : getFiles(workspaceId);
 
     if (!query || !query.trim()) return res.json([]);
 
-    if (!anthropic) {
+    // AI-ranked search is a Studio+ feature — a plan without it still gets
+    // real search, just the same plain keyword fallback already used when no
+    // API key is configured at all (search itself is too basic a function to
+    // block outright; the AI ranking specifically is what's gated).
+    if (!anthropic || !getEffectiveTier(workspaceId).limits.ai) {
       return res.json(keywordSearch(query, allFiles));
     }
 
@@ -896,6 +1035,13 @@ async function startServer() {
       fileContent?: string;
       mimeType?: string;
     };
+    // Checked before the !anthropic guard below, so a Freelance workspace
+    // sees a plan-limit message rather than something that reads as an ops
+    // problem — the frontend's upload flow already falls back to basic
+    // suggested tags on any failure here, same as the "not configured" path.
+    if (!getEffectiveTier(workspaceOf(req)).limits.ai) {
+      return res.status(402).json({ error: "AI tagging is a Studio-plan feature. Upgrade to enable it." });
+    }
     if (!anthropic) {
       return res.status(503).json({
         error: "AI is not configured. Add ANTHROPIC_API_KEY to your .env file and restart the server.",

@@ -43,6 +43,13 @@ import { HandoverFileRow } from "./HandoverFileRow";
 
 const ACCENT_SWATCHES = ["#D85E25", "#34A853", "#4285F4", "#9C27B0", "#E91E63", "#0EA5E9", "#EAB308", "#111111"];
 
+/** Seconds -> "m:ss" — mirrors the format used on the portal's video scrubber and pin badges. */
+function fmtTimecode(totalSeconds: number): string {
+  const s = Math.max(0, Math.floor(totalSeconds));
+  const m = Math.floor(s / 60);
+  return `${m}:${String(s % 60).padStart(2, "0")}`;
+}
+
 const STATUS_ORDER: HandoverStatus[] = ["Draft", "Sent", "Accepted"];
 
 function statusBadgeClass(status: HandoverStatus) {
@@ -607,11 +614,11 @@ export function HandoverPanel({
                             </div>
                           )}
 
-                          <div className="flex items-center justify-between pt-3 border-t border-line">
+                          <div className="flex flex-wrap items-center justify-between gap-2 pt-3 border-t border-line">
                             <span className="flex items-center gap-1.5 text-[12px] text-muted">
                               <Calendar className="w-3 h-3" /> {h.created} • {h.fileIds.length} file{h.fileIds.length === 1 ? "" : "s"}
                             </span>
-                            <div className="flex items-center gap-1.5">
+                            <div className="flex flex-wrap items-center gap-1.5">
                               {h.status === "Sent" && h.clientEmail && (
                                 <button
                                   onClick={() => remindClient(h)}
@@ -1172,7 +1179,9 @@ export function HandoverPanel({
                               </span>
                               {cm.fileId && (
                                 <span className="text-[11px] text-primary flex items-center gap-1">
-                                  <FileText className="w-3 h-3" /> {fileName(cm.fileId)}
+                                  <FileText className="w-3 h-3" />
+                                  {typeof cm.timecode === "number" ? `${fmtTimecode(cm.timecode)} in ` : ""}
+                                  {fileName(cm.fileId)}
                                 </span>
                               )}
                               <span className="ml-auto text-[11.5px] text-muted">{fmtTime(cm.created)}</span>

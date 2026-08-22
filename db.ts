@@ -57,7 +57,9 @@ import type {
   WorkspaceRole,
   WorkspaceMember,
   PendingInvite,
+  PlanTier,
 } from "./src/types.ts";
+import { computeEffectiveTier, type EffectiveTier, type WorkspaceBillingRow } from "./server/billingCore.ts";
 
 // DATA_DIR lets a deployment point the database at a mounted persistent
 // volume (e.g. Railway/Fly) instead of the app's own working directory,
@@ -128,6 +130,7 @@ db.exec(`
     mime         TEXT,
     has_content  INTEGER NOT NULL DEFAULT 0,
     status_changed_at TEXT,
+    parent_id    TEXT,
     ord          INTEGER NOT NULL DEFAULT 0
   );
 
@@ -184,6 +187,8 @@ db.exec(`
     file_id       TEXT,
     x             REAL,
     y             REAL,
+    timecode      REAL,
+    version       TEXT,
     created       TEXT NOT NULL,
     internal_only INTEGER NOT NULL DEFAULT 0
   );
@@ -323,6 +328,17 @@ db.exec(`
     created         TEXT NOT NULL
   );
   CREATE INDEX IF NOT EXISTS idx_messages_conversation ON messages (conversation_id);
+
+  -- Dedup log for Stripe webhook deliveries. Stripe guarantees at-least-once
+  -- delivery (network retries, manual "Resend" from the Dashboard both
+  -- redeliver the same event id) — claimStripeEvent() does an INSERT OR
+  -- IGNORE against this and checks .changes, same idiom linkOAuthIdentity
+  -- already uses for the same kind of idempotent-insert problem.
+  CREATE TABLE IF NOT EXISTS stripe_events (
+    id       TEXT PRIMARY KEY,
+    type     TEXT NOT NULL,
+    received TEXT NOT NULL
+  );
 `);
 
 // Migration: add the `branding` column to handovers tables created before the
@@ -379,6 +395,14 @@ export function makePortalToken(): string {
   }
   if (!ccols.some((c) => c.name === "x")) db.exec(`ALTER TABLE handover_comments ADD COLUMN x REAL`);
   if (!ccols.some((c) => c.name === "y")) db.exec(`ALTER TABLE handover_comments ADD COLUMN y REAL`);
+  if (!ccols.some((c) => c.name === "timecode")) {
+    db.exec(`ALTER TABLE handover_comments ADD COLUMN timecode REAL`);
+    console.log("[db] Migrated: added handover_comments.timecode column.");
+  }
+  if (!ccols.some((c) => c.name === "version")) {
+    db.exec(`ALTER TABLE handover_comments ADD COLUMN version TEXT`);
+    console.log("[db] Migrated: added handover_comments.version column.");
+  }
 
   // Real-file-storage columns for databases created before uploads stored bytes.
   const fcols = db.prepare(`PRAGMA table_info(files)`).all() as { name: string }[];
@@ -390,6 +414,17 @@ export function makePortalToken(): string {
     db.exec(`ALTER TABLE files ADD COLUMN status_changed_at TEXT`);
     console.log("[db] Migrated: added files.status_changed_at column.");
   }
+  if (!fcols.some((c) => c.name === "parent_id")) {
+    db.exec(`ALTER TABLE files ADD COLUMN parent_id TEXT`);
+    console.log("[db] Migrated: added files.parent_id column (real folder nesting).");
+  }
+  if (!fcols.some((c) => c.name === "size_bytes")) {
+    // The existing `size` column is a display-formatted string ("8.3 MB"), not
+    // usable for quota math — this is the raw byte count, populated at every
+    // content-write site, that storage-quota enforcement sums per workspace.
+    db.exec(`ALTER TABLE files ADD COLUMN size_bytes INTEGER NOT NULL DEFAULT 0`);
+    console.log("[db] Migrated: added files.size_bytes column (storage-quota accounting).");
+  }
 
   // Backfill: any handover without a token gets one now.
   const missing = db.prepare(`SELECT id FROM handovers WHERE token IS NULL OR token = ''`).all() as { id: string }[];
@@ -399,6 +434,44 @@ export function makePortalToken(): string {
     console.log(`[db] Migrated: generated portal tokens for ${missing.length} handover(s).`);
   }
   db.exec(`CREATE UNIQUE INDEX IF NOT EXISTS idx_handovers_token ON handovers (token)`);
+}
+
+const TRIAL_MS = 14 * 24 * 60 * 60 * 1000;
+
+// Migration: billing/plan-tier columns, for databases created before paid
+// plans existed. plan_tier defaults every workspace to 'trial' — see
+// billingCore.ts for how trial_ends_at is interpreted (computed live against
+// Date.now(), no cron job needed).
+{
+  const wcols = db.prepare(`PRAGMA table_info(workspaces)`).all() as { name: string }[];
+  const add = (name: string, ddl: string) => {
+    if (!wcols.some((c) => c.name === name)) db.exec(`ALTER TABLE workspaces ADD COLUMN ${ddl}`);
+  };
+  add("plan_tier", "plan_tier TEXT NOT NULL DEFAULT 'trial'");
+  add("trial_ends_at", "trial_ends_at TEXT");
+  add("stripe_customer_id", "stripe_customer_id TEXT");
+  add("stripe_subscription_id", "stripe_subscription_id TEXT");
+  add("subscription_status", "subscription_status TEXT");
+  add("plan_interval", "plan_interval TEXT");
+  add("seats", "seats INTEGER NOT NULL DEFAULT 1");
+  add("storage_addon_units", "storage_addon_units INTEGER NOT NULL DEFAULT 0");
+  add("current_period_end", "current_period_end TEXT");
+  add("cancel_at_period_end", "cancel_at_period_end INTEGER NOT NULL DEFAULT 0");
+
+  // Backfill: any workspace that predates this migration (including ones
+  // created moments ago by createWorkspace() before this block first ran on
+  // a fresh boot) gets a fresh 14-day trial rather than an instantly-expired
+  // one — a pre-existing local desboard.db shouldn't get locked out the
+  // moment this ships.
+  const missingTrial = db.prepare(`SELECT id FROM workspaces WHERE trial_ends_at IS NULL`).all() as { id: string }[];
+  if (missingTrial.length > 0) {
+    const trialEndsAt = new Date(Date.now() + TRIAL_MS).toISOString();
+    const set = db.prepare(`UPDATE workspaces SET trial_ends_at = ? WHERE id = ?`);
+    missingTrial.forEach((r) => set.run(trialEndsAt, r.id));
+    console.log(`[db] Migrated: started a fresh 14-day trial for ${missingTrial.length} workspace(s).`);
+  }
+
+  db.exec(`CREATE INDEX IF NOT EXISTS idx_workspaces_stripe_customer ON workspaces (stripe_customer_id)`);
 }
 
 // Set by the migration block below when a fresh bootstrap workspace needs
@@ -707,7 +780,8 @@ interface FileRow {
   id: string; workspace_id: string; name: string; type: string; extension: string | null; size: string | null;
   created: string | null; owner: string | null; source: string | null; status: string | null;
   project_id: number | null; client_id: string | null; tags: string; versions: string; access: string;
-  mime: string | null; has_content: number; status_changed_at: string | null;
+  mime: string | null; has_content: number; status_changed_at: string | null; parent_id: string | null;
+  size_bytes: number;
 }
 
 function rowToFile(r: FileRow): VaultFile {
@@ -729,6 +803,8 @@ function rowToFile(r: FileRow): VaultFile {
     mime: r.mime ?? undefined,
     hasContent: r.has_content === 1,
     statusChangedAt: r.status_changed_at ?? undefined,
+    parentId: r.parent_id,
+    sizeBytes: r.size_bytes,
   };
 }
 
@@ -784,7 +860,8 @@ function rowToHandover(r: HandoverRow): Handover {
 
 interface CommentRow {
   id: string; handover_id: string; author: string; role: string; body: string;
-  file_id: string | null; x: number | null; y: number | null; created: string; internal_only: number;
+  file_id: string | null; x: number | null; y: number | null; timecode: number | null; version: string | null;
+  created: string; internal_only: number;
 }
 
 function rowToComment(r: CommentRow): HandoverComment {
@@ -797,6 +874,8 @@ function rowToComment(r: CommentRow): HandoverComment {
     fileId: r.file_id,
     x: r.x,
     y: r.y,
+    timecode: r.timecode,
+    version: r.version,
     created: r.created,
     internalOnly: r.internal_only === 1,
   };
@@ -898,9 +977,9 @@ function rowToSettings(r: Partial<SettingsRow>): StudioSettings {
 
 const insertFileStmt = db.prepare(`
   INSERT OR REPLACE INTO files
-    (id, workspace_id, name, type, extension, size, created, owner, source, status, project_id, client_id, tags, versions, access, mime, has_content, status_changed_at, ord)
+    (id, workspace_id, name, type, extension, size, created, owner, source, status, project_id, client_id, tags, versions, access, mime, has_content, status_changed_at, parent_id, size_bytes, ord)
   VALUES
-    (@id, @workspace_id, @name, @type, @extension, @size, @created, @owner, @source, @status, @project_id, @client_id, @tags, @versions, @access, @mime, @has_content, @status_changed_at, @ord)
+    (@id, @workspace_id, @name, @type, @extension, @size, @created, @owner, @source, @status, @project_id, @client_id, @tags, @versions, @access, @mime, @has_content, @status_changed_at, @parent_id, @size_bytes, @ord)
 `);
 
 function writeFile(file: VaultFile, ord: number, workspaceId: string) {
@@ -923,6 +1002,8 @@ function writeFile(file: VaultFile, ord: number, workspaceId: string) {
     mime: file.mime ?? null,
     has_content: file.hasContent ? 1 : 0,
     status_changed_at: file.statusChangedAt ?? null,
+    parent_id: file.parentId ?? null,
+    size_bytes: file.sizeBytes ?? 0,
     ord,
   });
 }
@@ -992,8 +1073,8 @@ function writeHandover(h: Handover, ord: number, workspaceId: string) {
 }
 
 const insertCommentStmt = db.prepare(`
-  INSERT OR REPLACE INTO handover_comments (id, handover_id, author, role, body, file_id, x, y, created, internal_only)
-  VALUES (@id, @handover_id, @author, @role, @body, @file_id, @x, @y, @created, @internal_only)
+  INSERT OR REPLACE INTO handover_comments (id, handover_id, author, role, body, file_id, x, y, timecode, version, created, internal_only)
+  VALUES (@id, @handover_id, @author, @role, @body, @file_id, @x, @y, @timecode, @version, @created, @internal_only)
 `);
 
 function writeComment(c: HandoverComment) {
@@ -1006,6 +1087,8 @@ function writeComment(c: HandoverComment) {
     file_id: c.fileId ?? null,
     x: typeof c.x === "number" ? c.x : null,
     y: typeof c.y === "number" ? c.y : null,
+    timecode: typeof c.timecode === "number" ? c.timecode : null,
+    version: c.version ?? null,
     created: c.created,
     internal_only: c.internalOnly ? 1 : 0,
   });
@@ -1254,13 +1337,172 @@ export interface WorkspaceRecord {
 export function createWorkspace(name: string): WorkspaceRecord {
   const id = crypto.randomUUID();
   const created = new Date().toISOString();
-  db.prepare(`INSERT INTO workspaces (id, name, created) VALUES (?, ?, ?)`).run(id, name, created);
+  // plan_tier takes its SQL-level DEFAULT ('trial'); trial_ends_at is stamped
+  // explicitly here since a new workspace's first boot may be well after the
+  // migration block above last ran (that block only backfills rows that
+  // predate this feature, not ones created afterward).
+  const trialEndsAt = new Date(Date.now() + TRIAL_MS).toISOString();
+  db.prepare(`INSERT INTO workspaces (id, name, created, trial_ends_at) VALUES (?, ?, ?, ?)`).run(id, name, created, trialEndsAt);
   return { id, name, created };
 }
 
 /** For the background reminder sweep, which has to check every workspace, not one at a time from a request. */
 export function getAllWorkspaceIds(): string[] {
   return (db.prepare(`SELECT id FROM workspaces`).all() as { id: string }[]).map((r) => r.id);
+}
+
+interface WorkspaceBillingSqlRow {
+  plan_tier: PlanTier;
+  trial_ends_at: string | null;
+  stripe_customer_id: string | null;
+  stripe_subscription_id: string | null;
+  subscription_status: string | null;
+  plan_interval: "month" | "year" | null;
+  seats: number;
+  storage_addon_units: number;
+  current_period_end: string | null;
+  cancel_at_period_end: number;
+}
+
+function getWorkspaceBillingRow(workspaceId: string): WorkspaceBillingSqlRow | undefined {
+  return db
+    .prepare(
+      `SELECT plan_tier, trial_ends_at, stripe_customer_id, stripe_subscription_id, subscription_status,
+              plan_interval, seats, storage_addon_units, current_period_end, cancel_at_period_end
+       FROM workspaces WHERE id = ?`
+    )
+    .get(workspaceId) as WorkspaceBillingSqlRow | undefined;
+}
+
+function toBillingCoreRow(row: WorkspaceBillingSqlRow): WorkspaceBillingRow {
+  return {
+    planTier: row.plan_tier,
+    trialEndsAt: row.trial_ends_at,
+    subscriptionStatus: row.subscription_status,
+    planInterval: row.plan_interval,
+    seats: row.seats,
+    storageAddonUnits: row.storage_addon_units,
+    currentPeriodEnd: row.current_period_end,
+    cancelAtPeriodEnd: !!row.cancel_at_period_end,
+  };
+}
+
+/**
+ * The one function every gating check (and BillingGate) calls to learn what
+ * a workspace is currently entitled to. A missing row (shouldn't happen —
+ * every workspace gets billing defaults at creation) fails closed as an
+ * expired trial rather than throwing, so a gate can never accidentally grant
+ * access on a lookup miss.
+ */
+export function getEffectiveTier(workspaceId: string): EffectiveTier {
+  const row = getWorkspaceBillingRow(workspaceId);
+  if (!row) return computeEffectiveTier({ planTier: "trial", trialEndsAt: new Date(0).toISOString(), subscriptionStatus: null, planInterval: null, seats: 1, storageAddonUnits: 0, currentPeriodEnd: null, cancelAtPeriodEnd: false });
+  return computeEffectiveTier(toBillingCoreRow(row));
+}
+
+/** Raw billing fields for the /api/billing/status response — everything getEffectiveTier's caller needs to also show, beyond just the computed entitlement. */
+export function getWorkspaceBillingInfo(workspaceId: string): WorkspaceBillingRow & { hasStripeCustomer: boolean } {
+  const row = getWorkspaceBillingRow(workspaceId);
+  if (!row) {
+    return { planTier: "trial", trialEndsAt: null, subscriptionStatus: null, planInterval: null, seats: 1, storageAddonUnits: 0, currentPeriodEnd: null, cancelAtPeriodEnd: false, hasStripeCustomer: false };
+  }
+  return { ...toBillingCoreRow(row), hasStripeCustomer: !!row.stripe_customer_id };
+}
+
+export function getWorkspaceStripeCustomerId(workspaceId: string): string | null {
+  const row = db.prepare(`SELECT stripe_customer_id FROM workspaces WHERE id = ?`).get(workspaceId) as { stripe_customer_id: string | null } | undefined;
+  return row?.stripe_customer_id ?? null;
+}
+
+export function setWorkspaceStripeCustomerId(workspaceId: string, stripeCustomerId: string): void {
+  db.prepare(`UPDATE workspaces SET stripe_customer_id = ? WHERE id = ?`).run(stripeCustomerId, workspaceId);
+}
+
+/** Fallback lookup for webhook events — the primary path is the workspaceId already embedded in the subscription's own metadata (set at checkout time), this is only for the rare case that's missing. */
+export function getWorkspaceIdByStripeCustomerId(stripeCustomerId: string): string | null {
+  const row = db.prepare(`SELECT id FROM workspaces WHERE stripe_customer_id = ?`).get(stripeCustomerId) as { id: string } | undefined;
+  return row?.id ?? null;
+}
+
+/**
+ * Applies a Stripe subscription's state to a workspace. Called from exactly
+ * one place: the signature-verified webhook handler in server/billing.ts.
+ *
+ * DELIBERATELY not wired to any route that forwards req.body — every other
+ * `update*` in this file merge-patches a client-supplied patch object
+ * straight into the row (see updateFile/updateHandover), which is exactly
+ * the wrong shape here: a signed-in user must never be able to influence
+ * their own plan_tier, or they could grant themselves Studio for free.
+ */
+export function updateWorkspaceBilling(
+  workspaceId: string,
+  patch: Partial<{
+    planTier: PlanTier;
+    stripeCustomerId: string;
+    stripeSubscriptionId: string | null;
+    subscriptionStatus: string | null;
+    planInterval: "month" | "year" | null;
+    seats: number;
+    storageAddonUnits: number;
+    currentPeriodEnd: string | null;
+    cancelAtPeriodEnd: boolean;
+  }>
+): void {
+  const sets: string[] = [];
+  const values: unknown[] = [];
+  const map: Record<string, unknown> = {
+    plan_tier: patch.planTier,
+    stripe_customer_id: patch.stripeCustomerId,
+    stripe_subscription_id: patch.stripeSubscriptionId,
+    subscription_status: patch.subscriptionStatus,
+    plan_interval: patch.planInterval,
+    seats: patch.seats,
+    storage_addon_units: patch.storageAddonUnits,
+    current_period_end: patch.currentPeriodEnd,
+    cancel_at_period_end: patch.cancelAtPeriodEnd === undefined ? undefined : patch.cancelAtPeriodEnd ? 1 : 0,
+  };
+  for (const [col, val] of Object.entries(map)) {
+    if (val === undefined) continue;
+    sets.push(`${col} = ?`);
+    values.push(val);
+  }
+  if (sets.length === 0) return;
+  values.push(workspaceId);
+  db.prepare(`UPDATE workspaces SET ${sets.join(", ")} WHERE id = ?`).run(...values);
+}
+
+/** Sum of current-version file bytes for a workspace — see files.size_bytes's migration comment for why this exists alongside the display-formatted `size` column. */
+export function getWorkspaceStorageBytes(workspaceId: string): number {
+  const row = db.prepare(`SELECT COALESCE(SUM(size_bytes), 0) AS total FROM files WHERE workspace_id = ?`).get(workspaceId) as { total: number };
+  return row.total;
+}
+
+/** "Active" = actually shared with a client, not still-in-prep — every handover starts as Draft (see HandoverPanel.tsx's handleCreate). */
+export function getActiveHandoverCount(workspaceId: string): number {
+  const row = db
+    .prepare(`SELECT COUNT(*) AS n FROM handovers WHERE workspace_id = ? AND revoked = 0 AND status IN ('Sent','Accepted')`)
+    .get(workspaceId) as { n: number };
+  return row.n;
+}
+
+export function getWorkspaceMemberCount(workspaceId: string): number {
+  const row = db.prepare(`SELECT COUNT(*) AS n FROM users WHERE workspace_id = ?`).get(workspaceId) as { n: number };
+  return row.n;
+}
+
+/**
+ * Idempotent webhook-delivery claim: Stripe guarantees at-least-once
+ * delivery (retries, manual "Resend" from the Dashboard both redeliver the
+ * same event id). Returns true the first time an event id is seen (caller
+ * should process it), false on every redelivery (caller should ack 200 and
+ * no-op) — same INSERT-OR-IGNORE-and-check-.changes idiom linkOAuthIdentity
+ * already uses for the same class of problem.
+ */
+export function claimStripeEvent(eventId: string, type: string): boolean {
+  const result = db
+    .prepare(`INSERT OR IGNORE INTO stripe_events (id, type, received) VALUES (?, ?, ?)`)
+    .run(eventId, type, new Date().toISOString());
+  return result.changes > 0;
 }
 
 /** A user record including the password hash — only for internal auth checks, never returned to a route response as-is. */
@@ -1469,6 +1711,24 @@ export function updateFile(id: string, patch: Partial<VaultFile>, workspaceId: s
   return getFileById(id, workspaceId);
 }
 
+/**
+ * Deletes one file/folder row. Deleting a folder never destroys what's inside
+ * it — its direct children are re-parented up to the folder's own parent
+ * (or the root, if it had none), the same way deleting a directory's entry
+ * without `-r` would leave its contents in place one level up.
+ */
+export function deleteFile(id: string, workspaceId: string): boolean {
+  const existing = getFileById(id, workspaceId);
+  if (!existing) return false;
+  if (existing.type === "folder") {
+    const children = db.prepare(`SELECT id FROM files WHERE parent_id = ? AND workspace_id = ?`).all(id, workspaceId) as { id: string }[];
+    const reparent = db.prepare(`UPDATE files SET parent_id = ? WHERE id = ? AND workspace_id = ?`);
+    children.forEach((c) => reparent.run(existing.parentId ?? null, c.id, workspaceId));
+  }
+  const info = db.prepare(`DELETE FROM files WHERE id = ? AND workspace_id = ?`).run(id, workspaceId);
+  return info.changes > 0;
+}
+
 export function getProjects(workspaceId: string): ProjectFull[] {
   const rows = db.prepare(`SELECT * FROM projects WHERE workspace_id = ? ORDER BY ord DESC`).all(workspaceId) as ProjectRow[];
   return rows.map(rowToProject);
@@ -1512,8 +1772,33 @@ export function getHandoverById(id: string, workspaceId: string): Handover | und
   return row ? rowToHandover(row) : undefined;
 }
 
+/** True once a file carries any tag starting with "Client" — the only ones the portal treats as client-visible. */
+export function isClientVisible(access: string[]): boolean {
+  return access.some((a) => a.startsWith("Client"));
+}
+
+/**
+ * A file only reaches the client portal if it's explicitly tagged client-visible
+ * (see isClientVisible / the portal's filesOf filter) — so the moment a file is
+ * put into a handover, it's tagged automatically. This is what makes "Access
+ * Control" tags a real, enforced permission instead of decoration: adding a
+ * file to a delivery is the one action that's supposed to make it client-facing,
+ * so that's exactly when the tag gets set. Removing the tag afterward (from the
+ * file's own Access Control list) genuinely revokes it from every portal it's
+ * in — nothing here re-adds it.
+ */
+function ensureClientVisible(fileIds: string[], workspaceId: string): void {
+  for (const fileId of fileIds) {
+    const file = getFileById(fileId, workspaceId);
+    if (file && !isClientVisible(file.access)) {
+      updateFile(fileId, { access: [...file.access, "Client (Read-only)"] }, workspaceId);
+    }
+  }
+}
+
 export function createHandover(h: Handover, workspaceId: string): Handover {
   writeHandover(h, Date.now(), workspaceId);
+  ensureClientVisible(h.fileIds, workspaceId);
   return getHandoverById(h.id, workspaceId)!;
 }
 
@@ -1523,6 +1808,7 @@ export function updateHandover(id: string, patch: Partial<Handover>, workspaceId
   const merged: Handover = { ...existing, ...patch, id };
   const ordRow = db.prepare(`SELECT ord FROM handovers WHERE id = ? AND workspace_id = ?`).get(id, workspaceId) as { ord: number };
   writeHandover(merged, ordRow.ord, workspaceId);
+  if (patch.fileIds) ensureClientVisible(patch.fileIds, workspaceId);
   return getHandoverById(id, workspaceId);
 }
 
@@ -1606,6 +1892,16 @@ export function getComments(handoverId: string): HandoverComment[] {
 export function addComment(c: HandoverComment): HandoverComment {
   writeComment(c);
   return getComments(c.handoverId).find((x) => x.id === c.id)!;
+}
+
+/** Edits a note's body in place — position (x/y/timecode), author, and role are untouched. */
+export function updateCommentBody(id: string, body: string): HandoverComment | undefined {
+  const row = db.prepare(`SELECT * FROM handover_comments WHERE id = ?`).get(id) as CommentRow | undefined;
+  if (!row) return undefined;
+  const merged = rowToComment(row);
+  merged.body = body;
+  writeComment(merged);
+  return merged;
 }
 
 export function deleteComment(id: string): boolean {
@@ -2445,6 +2741,18 @@ export function clearDemoData(workspaceId: string): void {
     );
   }
   console.log("[db] Cleared demo/seed data.");
+}
+
+// One-time backfill for the "Access Control" tags becoming a real, enforced
+// permission (see ensureClientVisible) instead of decoration: any file that
+// was already part of a handover before this shipped needs the client tag
+// applied now, or it would silently vanish from an already-sent portal link
+// the moment enforcement went live. Cheap and idempotent — safe to run on
+// every boot, across every workspace.
+for (const workspaceId of getAllWorkspaceIds()) {
+  for (const h of getHandovers(workspaceId)) {
+    ensureClientVisible(h.fileIds, workspaceId);
+  }
 }
 
 export default db;

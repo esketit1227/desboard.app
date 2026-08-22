@@ -1,185 +1,289 @@
-# Desboard — AI-Augmented Workspace Platform
+# Desboard — AI-Augmented Client-Delivery Workspace
 
-Desboard is a file & project management dashboard for design studios, with a
-distinct "Cosmic Slate" desktop-metaphor UI and AI features powered by the
-**Anthropic Claude API**. The API key stays on the server — it never reaches the
-browser.
+Desboard is a multi-tenant SaaS platform for design studios: a project & file
+workspace for the team, paired with a token-only client portal for review,
+approval, and delivery — with **Anthropic Claude** woven in for search,
+copiloting, and upload triage. It's a full product now, not a demo: real
+signup/SSO auth, Stripe billing with plan-gated features, per-workspace data
+isolation, and a marketing site, all running on one small Express server.
 
-This document is the deep dive into the app's architecture, features, and how to
-run it.
+This document is the deep dive into the app's architecture, features, and how
+to run it.
 
 ---
 
 ## Quick Start
 
-1. Make sure **Node.js** is installed (this project was built and tested on Node 22).
-2. Add your Anthropic API key. A `.env` file already exists at the project root —
-   open it and replace the placeholder:
-
-   ```
-   ANTHROPIC_API_KEY="sk-ant-...your real key..."
-   ```
-
-   Get a key from <https://console.anthropic.com/> → **Settings → API Keys**.
-   (`.env` is git-ignored so your key never gets committed. `.env.example` shows
-   the expected format.)
-3. Install dependencies (already done if you ran `npm install`):
-
+1. **Node.js 22** (see `engines` in `package.json`).
+2. Copy `.env.example` to `.env`. Only `ANTHROPIC_API_KEY` matters for local
+   dev — every other variable (Stripe, OAuth, SSO, Resend, Supabase) is
+   optional and the app degrades gracefully without it. Each block in
+   `.env.example` explains exactly what it unlocks and how to obtain it.
+3. Install dependencies:
    ```
    npm install
    ```
-4. Run everything (frontend + backend together) in dev mode:
-
+4. Run frontend + backend together (Vite as Express middleware, one port):
    ```
    npm run dev
    ```
-5. Open **<http://localhost:3000>** in your browser.
+5. Open **<http://localhost:3000>**.
 
-> The app runs even without a key — but the AI features (search, copilots, upload
-> tagging) stay disabled, and semantic search degrades to plain keyword matching.
-> Add the key and restart to enable them.
+Every new workspace (signup, invite-accept, or SSO) starts on a **14-day
+trial** with the full Studio feature set at trial-sized volume caps — no
+credit card required. See [§5 Billing & Plans](#5-billing--plans).
 
-Production build (optional): `npm run build` then `npm start`.
-
----
-
-## 1. Architectural Overview
-
-A unified full-stack monorepo:
-
-- **Frontend:** A single-page app built with **React 18 + Vite** and styled with
-  **Tailwind CSS**. UI animation uses **Framer Motion** (`motion/react`). State is
-  managed with React hooks.
-- **Backend:** A **Node.js / Express** server (`server.ts`) that is both the API
-  gateway and the AI compute layer.
-- **Database:** A local **SQLite** database (`desboard.db`, via `better-sqlite3`)
-  stores files, projects, and tags so data survives a refresh. It is created and
-  seeded automatically on first run.
-- **Dev/prod:** In development, Vite runs as Express middleware so the frontend
-  (with HMR) and the API share one port (3000). In production, `esbuild` bundles
-  the server to `dist/server.cjs` and Vite builds the static assets into `dist/`.
+Other scripts: `npm run build` (Vite build + esbuild server bundle) → `npm
+start` (production). `npm run lint` (`tsc --noEmit`). `npm test` (Vitest).
 
 ---
 
-## 2. Core Intelligent Features (Powered by Anthropic Claude)
+## 1. Architecture
 
-The backend uses the official **`@anthropic-ai/sdk`** package and manages
-`ANTHROPIC_API_KEY` server-side, so credentials and raw prompts never reach the
-client browser.
-
-**Model choice** (verified against Anthropic's current model catalog):
-
-- **`claude-sonnet-4-6`** — File Copilot, Project Copilot, and upload analysis.
-- **`claude-haiku-4-5`** — the fast semantic-search endpoint.
-
-### 2.1. Semantic Vault Search (`/api/search`, `claude-haiku-4-5`)
-The user's query plus a **compact index** of file names, tags, status, and type is
-sent to Claude Haiku, which returns a **ranked JSON array of matching file ids**.
-If the AI call fails or no key is configured, the endpoint **falls back to plain
-keyword matching** so search always works.
-
-### 2.2. Project Copilot (`/api/chat`, `claude-sonnet-4-6`)
-Open the Copilot from any project. The full project object is passed as context so
-Claude can draft client update emails, analyze deadlines and timeline risks, and
-summarize the project's state.
-
-### 2.3. File Copilot (`/api/chat`, `claude-sonnet-4-6`)
-The "AI" tab of the file inspector chats directly about the selected file —
-extract action items, generate summaries, or ask questions.
-
-### 2.4. Upload Analysis (`/api/analyze`, `claude-sonnet-4-6`)
-On upload, Claude suggests a short summary and 3–5 tags. Images and PDFs are sent
-to the model as real content; other file types are analyzed from their name/type.
+- **Frontend:** React 19 + Vite 6, Tailwind CSS 4 (CSS-first `@theme`
+  config), `motion/react` for animation. No router — the dashboard is a
+  single-page "desktop" shell with its own internal window/dock navigation;
+  `/pricing` and `/join/:token` are the only two real cold-landable URLs,
+  handled as plain path checks in `App.tsx`.
+- **Backend:** Node.js + Express (`server.ts`), organized as one slim
+  entrypoint that mounts focused routers from `server/`: `auth.ts` (session
+  auth), `sso.ts` ("Sign in with Google/Microsoft/Apple"), `oauth.ts`
+  (Drive/Dropbox/OneDrive file import), `portal.ts` (the client-facing
+  surface), `billing.ts` (Stripe), `invites.ts` (team invites), `email.ts`
+  (Resend), `storage.ts` (file bytes + version bytes on disk).
+- **Database:** SQLite via `better-sqlite3` (`desboard.db`), created and
+  migrated automatically on first run (`ALTER TABLE` migrations logged to the
+  console, so upgrading an existing local database is a non-event).
+- **Testing:** Vitest. The gating/entitlement/crypto logic that most needs to
+  be provably correct is split into dependency-free "core" modules
+  (`authCore.ts`, `portalCore.ts`, `oauthCore.ts`, `ssoCore.ts`,
+  `billingCore.ts`) so it can be unit-tested without spinning up Express or
+  SQLite.
 
 ---
 
-## 3. UI/UX & Design Philosophy
+## 2. Multi-Tenancy & Auth
 
-### 3.1. The "Cosmic Slate" Aesthetic
-Deep charcoal/near-black panels (`#050505`, `#111`) with soft off-white text
-(`#EBE6DD`), a terracotta accent (`#D85E25`), a subtle mesh-gradient background,
-and a CSS glass-noise overlay for texture.
+Every row in the database is scoped to a `workspace_id` — studios never see
+each other's data. A **user** belongs to exactly one workspace with a role of
+`owner` or `member`.
 
-### 3.2. Accessibility & Dynamic Theme
-A high-contrast light mode is achieved with a single CSS filter
-(`invert(1) hue-rotate(180deg)`) applied to the root container — instant, with no
-duplicated stylesheets.
-
-### 3.3. Typography
-A dual-font system: **Inter / Space Grotesk** for display and body text,
-**JetBrains-style monospace** for metadata, timestamps, and tags.
-
-### 3.4. Animation
-`motion/react` powers window transitions, staggered lists, and hover
-micro-interactions.
-
----
-
-## 4. Vault & Workspace Workflows
-
-- **Desktop metaphor:** widgets on the dashboard open draggable, minimizable,
-  maximizable "OS windows" (Projects, File Vault, Client Portal, Calendar), tracked
-  in a bottom dock.
-- **Grid / List views** for the vault, with a stateful project/tag filter.
-- **Drag-and-drop** files onto project folders (native HTML5 DnD) — moves persist
-  to SQLite.
-- **File inspector** with Details, Version History (+ comparison), Links, and an AI
-  tab.
-- **Handovers:** open a project → **Handovers** to assemble delivery packages —
-  pick files from the vault, add a note and recipient, advance the status
-  (Draft → Sent → Accepted), and copy a share link. Packages persist to SQLite.
-- **Branded landing pages:** each handover has a **Customize Page** editor —
-  set an accent color, dark/light theme, logo, headline, subheading, and welcome
-  message with a live preview. The result is a real, standalone, client-facing
-  page served by Express at `/handover/:id` (no app UI, fully shareable). The
-  same renderer (`src/lib/handoverPage.ts`) powers both the preview and the
-  served page, so they never drift.
-- **Shared discussion (meeting ground):** the handover landing page carries a
-  live discussion thread. The **client** can leave notes and annotate specific
-  files right on the shared page (no login), and the **designer** sees and
-  replies from the app (Projects → Handovers → **Discussion**). It's one shared
-  conversation persisted to SQLite; the card shows an unread-style comment count.
+- **Sign up / log in:** email + password (`server/auth.ts`), or **SSO** with
+  Google, Microsoft, or Apple (`server/sso.ts`) — both mint a session cookie
+  the same way. Signing up always creates a brand-new workspace; there's no
+  path to "join" one except an explicit invite.
+- **Team invites:** an owner generates a single-use link (`Team` app →
+  `server/invites.ts`); accepting it (`/join/:token`) adds the person to the
+  *existing* workspace as a `member`, gated by that plan's seat cap.
+- **Client portal auth is a separate, structurally distinct trust boundary**
+  (`server/portal.ts`) — a token-only surface that never checks a studio
+  session. Each handover gets its own shareable link with one of three access
+  modes: **public** (anyone with the link), **password**-gated, or
+  **invite**-only (a specific client email). Links can expire or be revoked.
+  Everything the client can see is filtered server-side through explicit DTOs
+  (`server/portalCore.ts`) — the portal is handed exactly the fields it's
+  allowed to see, never a raw internal record.
 
 ---
 
-## 5. Project Structure
+## 3. Billing & Plans
+
+Stripe-backed subscription billing (`server/billing.ts`,
+`server/billingCore.ts`) with plan-gated features enforced server-side on
+every relevant write, not just in the UI:
+
+| | **Trial** | **Freelance** | **Studio** | **Enterprise** |
+|---|---|---|---|---|
+| Duration | 14 days | — | — | — |
+| Seats | 3 | 1 | Unlimited | Unlimited |
+| Storage | 5GB | 100GB | 1TB (+ $15/100GB add-on) | Unlimited |
+| Active handovers | 2 | 5 | Unlimited | Unlimited |
+| Folder nesting / bulk actions / multi-upload | ✓ | — | ✓ | ✓ |
+| AI features | ✓ | — | ✓ | ✓ |
+
+`computeEffectiveTier()` in `billingCore.ts` is the single source of truth
+every gating check calls — it resolves trial expiry live against the current
+time (no cron job to go stale), and a canceled subscription stays blocked
+permanently rather than quietly reverting to a fresh trial. Checkout and the
+billing portal are real Stripe Checkout/Billing Portal sessions; plan
+changes land via a signature-verified webhook
+(`POST /api/billing/webhook`). Without `STRIPE_SECRET_KEY` set, trials and
+`/pricing` still work fully — only checkout itself is disabled.
+
+---
+
+## 4. Core Intelligent Features (Anthropic Claude)
+
+The backend uses the official **`@anthropic-ai/sdk`**; `ANTHROPIC_API_KEY`
+never reaches the browser. Every AI route checks a nullable client and
+returns a friendly `503` if no key is configured — the frontend reads that
+state from `GET /api/ai/status` and degrades its own UI honestly (e.g.
+semantic search visibly falls back to keyword matching) rather than pretending
+AI is available.
+
+- **`claude-sonnet-4-6`** — File Copilot, Project Copilot, upload analysis,
+  and the streaming home-screen Assistant.
+- **`claude-haiku-4-5`** — fast semantic Vault search.
+
+| Feature | Route | Model |
+|---|---|---|
+| Semantic Vault search | `POST /api/search` | Haiku |
+| Project Copilot | `POST /api/chat` | Sonnet |
+| File Copilot | `POST /api/chat` | Sonnet |
+| Upload tagging & summary | `POST /api/analyze` | Sonnet |
+| Home Assistant (streaming, SSE) | `POST /api/assistant` | Sonnet |
+
+The home-screen **Assistant** is read-only by design: it answers over a
+compact index of the workspace's real data and cites sources structurally
+(real file ids resolved server-side, never parsed back out of its prose) — it
+never performs writes, and is instructed to redirect write requests to the
+right screen instead.
+
+---
+
+## 5. Client Portal & Proofing
+
+The part clients actually touch, and the product's core differentiator:
+
+- **Branded landing page per handover** — accent color, theme, logo,
+  headline, welcome note, all live-previewed in the app and served standalone
+  at `/portal/:token` (no app chrome). One shared renderer
+  (`src/lib/handoverPage.ts`) powers both the live preview and the real page,
+  so they can't drift.
+- **Visual proofing that's actually useful, not just a comment box:**
+  - **Image pins** — click anywhere on an image to drop a positioned,
+    percentage-based comment pin.
+  - **Video timecode pins** — a real custom `<video>` player (HTTP Range /
+    206 Partial Content support for seeking) with click-to-pin commenting at
+    an exact timecode.
+  - Every pin is **editable and deletable by its author**, and a **side
+    panel** lists every timestamp/position with its note, bidirectionally
+    linked to the on-media markers — click a pin to jump to its note, or vice
+    versa.
+  - **Version-aware:** pins carry the file version they were left on; a
+    version picker on the portal switches media in place, and older-version
+    pins render in the panel (not as stale on-media markers) when you're
+    viewing a different version.
+- **Approvals:** clients can approve a file or request changes; the studio
+  side sees status at a glance (`getPendingApprovalSummary`).
+- **Access control:** files are only client-visible if explicitly tagged so
+  (`isClientVisible`) — internal working files never leak into a handover by
+  accident, even if they're technically attached to the project.
+- **Reminders:** a background sweep finds handovers a client hasn't opened in
+  N days and emails a nudge (via Resend, if configured — otherwise logged to
+  the console, nothing breaks).
+
+---
+
+## 6. File Vault
+
+- **Real folder nesting** — breadcrumb navigation, drag-and-drop, cascading
+  project moves (moving a folder moves its whole subtree), with a
+  cycle-safe guard against nesting a folder into its own descendant.
+  Plan-gated (Studio/Enterprise).
+- **Multi-file upload** with a lightweight progress queue, and **bulk
+  actions** — multi-select (checkbox or shift-click range), bulk tag, move,
+  download, delete. Plan-gated.
+- **Version history** with restore, and a real side-by-side/slider version
+  compare.
+- **Cloud import** — connect Google Drive, Dropbox, or OneDrive
+  (`server/oauth.ts`, Settings → Connections) and browse/import files
+  directly, for studios whose source-of-truth lives elsewhere.
+- **AI-assisted upload tagging & semantic search** (plan-gated; see §4).
+
+---
+
+## 7. The Workspace
+
+One desktop-metaphor shell (`src/pages/Dashboard.tsx`) with a dock of
+independent apps:
+
+| App | What it's for |
+|---|---|
+| **Home** | Activity feed, insight rail, and the streaming AI Assistant |
+| **Projects** | Project list/detail, tasks, deadlines, Project Copilot |
+| **File Vault** | Everything in §6 |
+| **Client Portal** | Manage handovers — assemble, brand, send, track status/approvals |
+| **Calendar** | Team scheduling/events |
+| **Messaging** | Internal team conversations |
+| **Team** | Members, roles, invites, seat usage |
+| **Connections** | Cloud storage OAuth connections (Drive/Dropbox/OneDrive) |
+| **Settings** | Workspace settings, billing, demo-data reset |
+
+---
+
+## 8. Design System
+
+A cool-neutral, white-dominant "elevated white" aesthetic (macOS
+Finder/Sequoia-inspired) — flat grey canvas (`--color-paper`), white cards
+raised on shadow rather than color-fill, near-black ink text, a muted
+moss/slate accent family. Inter carries the dashboard end-to-end; the
+marketing site (`/`, `/pricing`) switches to a distinct "editorial" system —
+Instrument Sans, near-monochrome, hairline dividers, real product screenshots
+doing the visual work (no stock photography, no fabricated logos/testimonials).
+A high-contrast mode is available via a single CSS filter on the root
+container.
+
+---
+
+## 9. Project Structure
 
 ```
-server.ts                     Express server + Anthropic proxy + REST API
-db.ts                         SQLite schema, seed data, and query helpers
+server.ts                       Express entrypoint — mounts routers, Anthropic proxy, core REST API
+db.ts                           SQLite schema, migrations, seed data, query helpers
+server/
+  auth.ts / authCore.ts         Email/password session auth (+ pure, testable core)
+  sso.ts / ssoCore.ts           "Sign in with Google/Microsoft/Apple"
+  oauth.ts / oauthCore.ts       Cloud storage connections (Drive/Dropbox/OneDrive)
+  portal.ts / portalCore.ts     Client portal — token auth, comments, approvals, DTOs
+  billing.ts / billingCore.ts   Stripe checkout/portal/webhook + plan entitlement math
+  invites.ts                    Team invite links
+  email.ts                      Transactional email (Resend)
+  storage.ts                    File + version byte storage, HTTP Range streaming
+  supabase*.ts                  Supabase client scaffolding (not wired into the active auth path)
+  *.test.ts                     Vitest suites for the pure "core" modules above
 src/
-  types.ts                    Shared TypeScript types (server + client)
-  lib/api.ts                  Frontend API client (all calls go to /api/*)
-  lib/handoverPage.ts         Shared renderer for the branded handover landing page
-                              (used by both the server route and the live preview)
-  pages/Dashboard.tsx         Desktop shell (header, widgets, window manager, dock)
+  types.ts                      Shared TypeScript types (server + client)
+  App.tsx                       Top-level path routing (/, /pricing, /join/:token, dashboard)
+  lib/
+    api.ts                      Frontend API client (all calls go to /api/*)
+    assistant.ts                Streaming (SSE) client for the home Assistant
+    handoverPage.ts             Shared renderer for the branded portal page (preview + live route)
+    filePreview.ts, utils.ts, oauthStates.ts, portalStates.ts
+  pages/
+    Dashboard.tsx                Desktop shell (dock, window manager, app router)
+    PricingPage.tsx               Standalone /pricing page
   components/
-    OSWindow.tsx              Draggable window chrome + app router
-    Dock.tsx                  Bottom dock
-    WidgetCard.tsx            Reusable dashboard widget card
-    Toast.tsx                 Toast notifications
-    windowTypes.ts            Window state types
-    apps/
-      FileVaultApp.tsx        File Vault (grid/list, upload, AI search, inspector)
-      ProjectsApp.tsx         Projects list/detail + Project Copilot
-      HandoverPanel.tsx       Handover packages for a project (files + status + share link)
-      ClientPortalApp.tsx     Brandable client portal
-      CalendarApp.tsx         Calendar / collaboration
+    apps/                        One component per dock app (see §7)
+    assistant/                   Home Assistant UI (box, thread, suggestion chips)
+    auth/                        AuthGate, BillingGate, JoinInvite, landing page chrome
+    home/                        Activity list, insight rail, celebration banner
+    PricingCards.tsx, MarketingPricingCards.tsx
 ```
 
 ---
 
-## 6. Security
+## 10. Security
 
-All Anthropic SDK calls happen on the Express server. The `ANTHROPIC_API_KEY` is
-read from `.env` (git-ignored) and is never exposed to the browser, preventing key
-extraction or quota abuse.
+- All Anthropic/Stripe SDK calls happen server-side; secrets are read from
+  `.env` (git-ignored) and never reach the browser.
+- Session and portal cookies are HMAC-signed with `SESSION_SECRET` /
+  `PORTAL_SECRET` — the production server refuses to boot without them set,
+  so a restart can't silently invalidate every signed-in session or
+  outstanding client link with a rotating default.
+- The client portal is a hard trust boundary: token-scoped access, explicit
+  DTO allowlists (never raw internal records), and per-route rate limiting
+  (page views, password attempts, comments, downloads, approvals each have
+  their own limiter).
+- File access respects plan entitlements and explicit client-visibility
+  tagging — nothing reaches a client by accident.
 
-## Getting Started
+---
 
-1. Ensure Node.js is installed.
-2. Put your `ANTHROPIC_API_KEY` in the `.env` file at the project root.
-3. Install dependencies: `npm install`
-4. Run development server: `npm run dev` (Express + Vite middleware on port 3000)
-5. Open <http://localhost:3000>
-6. Build for production: `npm run build`, then run it with `npm start`
+## Environment Variables
+
+See `.env.example` — every variable is documented inline with what it
+unlocks and exactly how to obtain it. Only `ANTHROPIC_API_KEY` is needed for
+local dev; everything else (Stripe, Google/Microsoft/Apple OAuth & SSO,
+Resend, Supabase, `DATA_DIR` for persistent-volume hosts) is optional and
+fails gracefully when unset.

@@ -84,7 +84,7 @@ export function ConnectionsApp({ showToast }: { showToast: (msg: string) => void
 
   return (
     <div className="flex flex-col gap-6">
-      <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
         {PROVIDERS.map((p) => {
           const status = statuses[p.id];
           return (

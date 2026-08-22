@@ -82,6 +82,23 @@ const NAV_ITEMS: NavItem[] = [
 const THEME_KEY = "desboard_theme";
 const HIGH_CONTRAST_KEY = "desboard_high_contrast";
 
+// Content column width per app — sized to what each one's own layout actually
+// needs, not one blanket number. A narrow default (880px) reads as "centered
+// with dead space on both sides" the moment an app has real multi-panel
+// content (a sidebar + detail pane, a month grid + agenda) to fill instead of
+// prose. Home/Files/Client Portal already had their own tuned values; this
+// extends the same treatment to the rest of the apps with real internal
+// layout, rather than leaving them in the generic fallback.
+const CONTENT_MAX_WIDTH: Partial<Record<WindowType, string>> = {
+  files: "max-w-[1600px]",
+  messaging: "max-w-[1400px]",
+  client: "max-w-[1200px]",
+  calendar: "max-w-[1200px]",
+  team: "max-w-[1200px]",
+  connections: "max-w-[1040px]",
+  settings: "max-w-[1040px]",
+};
+
 export function Dashboard() {
   const { user, logout } = useAuth();
   const firstName = user.name?.trim().split(/\s+/)[0] || user.email.split("@")[0] || "there";
@@ -122,8 +139,6 @@ export function Dashboard() {
   const [activeMenu, setActiveMenu] = useState("home");
   // File the vault should open pre-selected (set by assistant citation chips).
   const [vaultFileId, setVaultFileId] = useState<string | null>(null);
-  // Project the vault should open pre-filtered to (Files & Assets tile).
-  const [vaultProjectId, setVaultProjectId] = useState<number | null>(null);
   // Focus the vault's search field on open (sidebar Search shortcut).
   const [vaultFocusSearch, setVaultFocusSearch] = useState(false);
   // Project Projects should deep-open to, and whether to also open its Tasks
@@ -264,11 +279,6 @@ export function Dashboard() {
         return (
           <ProjectsApp
             showToast={showToast}
-            onOpenWindow={openWindow}
-            onOpenProjectFiles={(numericProjectId) => {
-              setVaultProjectId(numericProjectId);
-              openWindow("files");
-            }}
             onOpenProjectMessages={(projectId) => {
               setMessagingProjectFilter(projectId);
               openWindow("messaging");
@@ -284,7 +294,6 @@ export function Dashboard() {
           <FileVaultApp
             showToast={showToast}
             initialFileId={vaultFileId}
-            initialProjectFilter={vaultProjectId}
             initialFocusSearch={vaultFocusSearch}
             highContrast={highContrast}
             onHighContrastChange={setHighContrast}
@@ -498,13 +507,7 @@ export function Dashboard() {
         <div className="flex-1 min-w-0 h-full overflow-y-auto">
           <div
             className={`mx-auto px-8 md:px-12 py-8 md:py-10 ${
-              activeView === null
-                ? "max-w-[1180px]"
-                : activeView === "files"
-                  ? "max-w-[1600px]"
-                  : activeView === "client"
-                    ? "max-w-[1200px]"
-                    : "max-w-[880px]"
+              activeView === null ? "max-w-[1180px]" : CONTENT_MAX_WIDTH[activeView] ?? "max-w-[880px]"
             }`}
           >
             <button
@@ -531,9 +534,9 @@ export function Dashboard() {
                   initial={{ opacity: 0 }}
                   animate={{ opacity: 1 }}
                   exit={{ opacity: 0 }}
-                  className="flex flex-col min-[1200px]:flex-row gap-8 items-start"
+                  className="flex flex-col min-[1200px]:flex-row gap-8 items-start justify-center"
                 >
-                  <div className="flex-1 min-w-0 max-w-[720px]">
+                  <div className="flex-1 w-full min-w-0 max-w-[720px]">
                     <div className="mb-8" style={{ fontFamily: "var(--font-serif)" }}>
                       <p className="italic text-[19px] text-muted mb-1.5">
                         {greeting()}, {firstName}.

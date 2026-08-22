@@ -28,6 +28,7 @@ import type {
   PendingInvite,
   InvitePreview,
   WorkspaceRole,
+  BillingStatus,
 } from "../types";
 
 async function toJson<T>(res: Response): Promise<T> {
@@ -60,6 +61,18 @@ export const api = {
   logout: () => fetch("/api/auth/logout", { method: "POST" }).then((r) => r.ok),
 
   me: () => fetch("/api/auth/me").then((r) => toJson<AuthUser>(r)),
+
+  // --- Billing ---
+  getBillingStatus: () => fetch("/api/billing/status").then((r) => toJson<BillingStatus>(r)),
+
+  /** Redirects the browser to Stripe's hosted Checkout page — the caller should set `window.location.href` to the returned url, not just await this. */
+  createCheckoutSession: (params: { tier: "freelance" | "studio"; interval: "month" | "year"; seats?: number }) =>
+    fetch("/api/billing/checkout", { method: "POST", headers: jsonHeaders, body: JSON.stringify(params) }).then((r) =>
+      toJson<{ url: string }>(r)
+    ),
+
+  /** Redirects the browser to Stripe's hosted Billing Portal — same `window.location.href = url` pattern as checkout. */
+  openBillingPortal: () => fetch("/api/billing/portal", { method: "POST" }).then((r) => toJson<{ url: string }>(r)),
 
   // --- Studio workspace members & invites (distinct from the /api/team contact directory below) ---
   getWorkspaceMembers: () => fetch("/api/team/members").then((r) => toJson<WorkspaceMember[]>(r)),
@@ -107,6 +120,8 @@ export const api = {
     fetch(`/api/files/${id}/version/${encodeURIComponent(version)}/restore`, { method: "POST" }).then((r) =>
       toJson<VaultFile>(r)
     ),
+
+  deleteFile: (id: string) => fetch(`/api/files/${id}`, { method: "DELETE" }).then((r) => r.ok),
 
   getProjects: () => fetch("/api/projects").then((r) => toJson<ProjectFull[]>(r)),
 
@@ -288,6 +303,8 @@ export const api = {
     ),
 
   // --- AI (proxied to Anthropic) ---
+  getAiStatus: () => fetch("/api/ai/status").then((r) => toJson<{ configured: boolean }>(r)),
+
   search: (query: string, files: VaultFile[]) =>
     fetch("/api/search", { method: "POST", headers: jsonHeaders, body: JSON.stringify({ query, files }) }).then((r) =>
       toJson<string[]>(r)

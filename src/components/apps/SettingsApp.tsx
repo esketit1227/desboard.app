@@ -1,9 +1,46 @@
 import { useState, useEffect } from "react";
 import { Sun, Moon, AlertTriangle, Users } from "lucide-react";
-import type { StudioSettings, AuthUser, WorkspaceMember, PendingInvite, WorkspaceRole } from "../../types";
+import type { StudioSettings, AuthUser, WorkspaceMember, PendingInvite, WorkspaceRole, BillingStatus } from "../../types";
 import { api } from "../../lib/api";
+import { PricingCards } from "../PricingCards";
 
 const ACCENT_SWATCHES = ["#D85E25", "#2F9463", "#4C6B93", "#B8791E", "#9C27B0", "#000000"];
+
+/** Workspace-level usage can reach GB/TB (unlike a single file's size), so this scales further than server/storage.ts's own formatBytes. */
+function formatBytes(n: number): string {
+  if (n < 1024) return `${n} B`;
+  if (n < 1024 ** 2) return `${(n / 1024).toFixed(1)} KB`;
+  if (n < 1024 ** 3) return `${(n / 1024 ** 2).toFixed(1)} MB`;
+  if (n < 1024 ** 4) return `${(n / 1024 ** 3).toFixed(1)} GB`;
+  return `${(n / 1024 ** 4).toFixed(2)} TB`;
+}
+
+function UsageBar({
+  label,
+  used,
+  cap,
+  format = (n) => String(n),
+}: {
+  label: string;
+  used: number;
+  cap: number | null;
+  format?: (n: number) => string;
+}) {
+  const pct = cap === null || cap === 0 ? 0 : Math.min(100, (used / cap) * 100);
+  return (
+    <div>
+      <div className="flex items-center justify-between mb-1.5">
+        <span className="text-[12.5px] text-muted">{label}</span>
+        <span className="text-[12px] text-muted tabular-nums">
+          {format(used)} {cap !== null ? `/ ${format(cap)}` : "· unlimited"}
+        </span>
+      </div>
+      <div className="h-1.5 rounded-full bg-chip overflow-hidden">
+        {cap !== null && <div className="h-full bg-primary rounded-full" style={{ width: `${pct}%` }} />}
+      </div>
+    </div>
+  );
+}
 
 /**
  * Settings window: studio-wide preferences, plus who's on the team and
@@ -41,6 +78,9 @@ export function SettingsApp({
   const [inviteRole, setInviteRole] = useState<WorkspaceRole>("member");
   const [creatingInvite, setCreatingInvite] = useState(false);
 
+  const [billing, setBilling] = useState<BillingStatus | null>(null);
+  const [openingPortal, setOpeningPortal] = useState(false);
+
   useEffect(() => {
     api
       .getSettings()
@@ -59,7 +99,20 @@ export function SettingsApp({
       })
       .catch((e) => console.error("Failed to load team", e))
       .finally(() => setLoadingTeam(false));
+
+    api.getBillingStatus().then(setBilling).catch((e) => console.error("Failed to load billing status", e));
   }, []);
+
+  const openBillingPortal = async () => {
+    setOpeningPortal(true);
+    try {
+      const { url } = await api.openBillingPortal();
+      window.location.href = url;
+    } catch (e) {
+      showToast(e instanceof Error ? e.message : "Could not open billing portal");
+      setOpeningPortal(false);
+    }
+  };
 
   const createInvite = async () => {
     setCreatingInvite(true);
@@ -178,6 +231,78 @@ export function SettingsApp({
         >
           {savingProfile ? "Saving…" : "Save profile"}
         </button>
+      </div>
+
+      <div className="bg-panel rounded-2xl p-6">
+        <h3 className="text-[15px] font-semibold text-ink mb-1">Billing &amp; plan</h3>
+        {!billing ? (
+          <p className="text-[13px] text-muted py-2">Loading…</p>
+        ) : (
+          <>
+            <p className="text-[12.5px] text-muted mb-5">
+              {billing.tier === "trial"
+                ? "You're on the 14-day trial — the full Studio feature set, no card required."
+                : "Usage against your current plan's limits."}
+            </p>
+
+            {billing.subscriptionStatus === "past_due" && (
+              <div className="flex items-start gap-2.5 bg-amber/10 border border-amber/30 rounded-lg px-4 py-3 mb-5">
+                <AlertTriangle className="w-4 h-4 text-amber shrink-0 mt-0.5" />
+                <p className="text-[12.5px] text-ink">
+                  Your last payment didn't go through. Stripe will retry automatically — update your card under
+                  "Manage billing" to avoid any interruption.
+                </p>
+              </div>
+            )}
+
+            <div className="flex items-center justify-between flex-wrap gap-3 mb-5">
+              <div>
+                <p className="text-[13px] text-muted mb-1">Current plan</p>
+                <p className="text-lg font-semibold text-ink capitalize">
+                  {billing.tier}
+                  {billing.tier !== "trial" && billing.planInterval && (
+                    <span className="text-[13px] text-muted font-normal"> · billed {billing.planInterval}ly</span>
+                  )}
+                </p>
+                {billing.tier === "trial" && billing.trialEndsAt && (
+                  <p className="text-[12.5px] text-muted mt-1">
+                    {Math.max(0, Math.ceil((Date.parse(billing.trialEndsAt) - Date.now()) / 86400000))} day
+                    {Math.ceil((Date.parse(billing.trialEndsAt) - Date.now()) / 86400000) === 1 ? "" : "s"} left
+                  </p>
+                )}
+                {billing.cancelAtPeriodEnd && billing.currentPeriodEnd && (
+                  <p className="text-[12.5px] text-ink mt-1">
+                    Cancels on {new Date(billing.currentPeriodEnd).toLocaleDateString()}
+                  </p>
+                )}
+              </div>
+              {me?.role === "owner" && billing.hasStripeCustomer && (
+                <button
+                  onClick={openBillingPortal}
+                  disabled={openingPortal}
+                  className="px-5 py-2.5 rounded-lg bg-primary hover:bg-primary/85 disabled:opacity-50 text-white transition-colors text-[13px] font-semibold"
+                >
+                  {openingPortal ? "Redirecting…" : "Manage billing"}
+                </button>
+              )}
+            </div>
+
+            <div className="flex flex-col gap-4 max-w-md mb-2">
+              <UsageBar label="Seats" used={billing.usage.members} cap={billing.limits.seatCap} />
+              <UsageBar label="Storage" used={billing.usage.storageBytes} cap={billing.limits.storageCapBytes} format={formatBytes} />
+              <UsageBar label="Active handovers" used={billing.usage.activeHandovers} cap={billing.limits.activeHandoverCap} />
+            </div>
+
+            {me?.role === "owner" && billing.tier === "trial" && (
+              <div className="mt-6 pt-6 border-t border-line">
+                <p className="text-[13px] text-ink font-medium mb-4">
+                  Choose a plan whenever you're ready — your trial keeps running until then.
+                </p>
+                <PricingCards variant="checkout" currentTier={billing.tier} />
+              </div>
+            )}
+          </>
+        )}
       </div>
 
       <div className="bg-panel rounded-2xl p-6">

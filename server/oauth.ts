@@ -19,10 +19,13 @@ import {
   saveOAuthConnection,
   setOAuthError,
   updateOAuthTokens,
+  getEffectiveTier,
+  getWorkspaceStorageBytes,
 } from "../db.ts";
 import { readAuthSession } from "./auth.ts";
 import { writeContent } from "./storage.ts";
 import { createFile } from "../db.ts";
+import { wouldExceedStorage } from "./billingCore.ts";
 import {
   TOKEN_URL,
   authorizeUrl,
@@ -348,6 +351,15 @@ export function createOAuthRouter(): Router {
 
     try {
       const { buffer, finalMime, finalName } = await downloadOrExport(provider, accessToken, fileId, name, mimeType || "");
+
+      // Same storage-quota enforcement as a direct upload — importing from a
+      // connected Drive/Dropbox/OneDrive account is a third path onto disk,
+      // not exempt from the cap just because the bytes came from elsewhere.
+      const { limits } = getEffectiveTier(session.workspaceId);
+      if (wouldExceedStorage(getWorkspaceStorageBytes(session.workspaceId), buffer.length, limits.storageCapBytes)) {
+        return res.status(402).json({ error: "This import would put you over your plan's storage limit. Free up space or upgrade your plan." });
+      }
+
       const base64 = buffer.toString("base64");
       const newFileId = `oauth_${provider}_${Date.now()}`;
       writeContent(newFileId, base64);
@@ -367,6 +379,7 @@ export function createOAuthRouter(): Router {
           access: [],
           mime: finalMime,
           hasContent: true,
+          sizeBytes: buffer.length,
         },
         session.workspaceId
       );

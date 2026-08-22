@@ -1,6 +1,6 @@
 import type React from "react";
 import { useState, useEffect } from "react";
-import { Plus, Send, Trash2, Briefcase, MessageSquare } from "lucide-react";
+import { Plus, Send, Trash2, Briefcase, MessageSquare, ArrowLeft } from "lucide-react";
 import type { Conversation, ConversationMessage, ProjectFull, TeamMember } from "../../types";
 import { api } from "../../lib/api";
 import { timeAgo } from "../../lib/utils";
@@ -160,7 +160,15 @@ export function MessagingApp({
         <div className="flex-1 flex items-center justify-center text-[13px] text-muted">Loading…</div>
       ) : (
         <div className="flex flex-1 min-h-0">
-          <div className="w-[280px] shrink-0 flex flex-col border-r border-line">
+          {/* Below sm: master-detail — the list and the open thread are each full-width
+              and mutually exclusive (picking a conversation swaps to the thread; the
+              in-thread back arrow swaps back), since there's no room to show both.
+              sm+: unchanged side-by-side panels. */}
+          <div
+            className={`${
+              selectedId ? "hidden sm:flex" : "flex"
+            } w-full sm:w-[280px] shrink-0 flex-col border-r border-line`}
+          >
             <div className="p-4 border-b border-line">
               <button
                 onClick={() => setShowNewForm((v) => !v)}
@@ -246,7 +254,7 @@ export function MessagingApp({
             </div>
           </div>
 
-          <div className="flex-1 flex flex-col min-w-0 bg-paper">
+          <div className={`${selectedId ? "flex" : "hidden sm:flex"} flex-1 flex-col min-w-0 bg-paper`}>
             {!selected ? (
               <div className="flex-1 flex items-center justify-center">
                 <div className="text-center">
@@ -256,9 +264,16 @@ export function MessagingApp({
               </div>
             ) : (
               <>
-                <div className="h-[60px] border-b border-line flex items-center px-6 shrink-0">
-                  <div>
-                    <h3 className="text-[14px] font-semibold text-ink leading-tight">{selected.title}</h3>
+                <div className="h-[60px] border-b border-line flex items-center gap-3 px-4 sm:px-6 shrink-0">
+                  <button
+                    onClick={() => setSelectedId(null)}
+                    className="sm:hidden shrink-0 p-1.5 -ml-1.5 text-muted hover:text-ink rounded-lg hover:bg-panel transition-colors"
+                    aria-label="Back to conversations"
+                  >
+                    <ArrowLeft className="w-4 h-4" />
+                  </button>
+                  <div className="min-w-0">
+                    <h3 className="text-[14px] font-semibold text-ink leading-tight truncate">{selected.title}</h3>
                     {projectName(selected.linkedProjectId) && (
                       <span className="text-[11.5px] text-muted flex items-center gap-1">
                         <Briefcase className="w-3 h-3" /> {projectName(selected.linkedProjectId)}

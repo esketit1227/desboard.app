@@ -16,19 +16,22 @@ import rateLimit from "express-rate-limit";
 import {
   createInvite,
   createUser,
+  getEffectiveTier,
   getInviteByToken,
   getPendingInvites,
   getUserByEmail,
   getUserById,
+  getWorkspaceMemberCount,
   getWorkspaceMembers,
   markInviteAccepted,
   revokeInvite,
 } from "../db.ts";
+import { wouldExceedSeatCap } from "./billingCore.ts";
 
 const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 
 /** Invite management is owner-only — a member shouldn't be able to grant themselves or others broader access. */
-function requireOwner(req: AuthedRequest, res: Response, next: NextFunction) {
+export function requireOwner(req: AuthedRequest, res: Response, next: NextFunction) {
   const user = req.auth && getUserById(req.auth.userId);
   if (!user || user.role !== "owner") return res.status(403).json({ error: "Only the studio owner can manage invites" });
   next();
@@ -49,6 +52,20 @@ export function createTeamRouter(): Router {
     const { email, role } = req.body as { email?: string; role?: string };
     const cleanEmail = (email || "").trim().toLowerCase();
     if (cleanEmail && !EMAIL_RE.test(cleanEmail)) return res.status(400).json({ error: "Enter a valid email address" });
+
+    const workspaceId = req.auth!.workspaceId;
+    const { limits } = getEffectiveTier(workspaceId);
+    const memberCount = getWorkspaceMemberCount(workspaceId);
+    const pendingCount = getPendingInvites(workspaceId).length;
+    if (wouldExceedSeatCap(memberCount, pendingCount, limits.seatCap)) {
+      return res.status(402).json({
+        error:
+          limits.seatCap === 1
+            ? "Your plan doesn't include team members — upgrade to Studio to invite people."
+            : `You've used all ${limits.seatCap} seats on your plan — buy more seats or upgrade to invite another person.`,
+      });
+    }
+
     const invite = createInvite(req.auth!.workspaceId, {
       email: cleanEmail || null,
       role: role === "owner" ? "owner" : "member",
@@ -90,6 +107,14 @@ export function createInviteAcceptRouter(): Router {
     if (!password || password.length < 8) return res.status(400).json({ error: "Password must be at least 8 characters" });
     if (getUserByEmail(cleanEmail)) {
       return res.status(409).json({ error: "An account with that email already exists — sign in instead" });
+    }
+
+    // Defensive re-check: seats may have dropped between when this invite was
+    // created and now (e.g. the owner downgraded). Don't invalidate the
+    // token — it can still succeed once seats free up again.
+    const { limits } = getEffectiveTier(invite.workspace_id);
+    if (wouldExceedSeatCap(getWorkspaceMemberCount(invite.workspace_id), 0, limits.seatCap)) {
+      return res.status(402).json({ error: "This workspace is at its seat limit right now — ask the owner to free up or add a seat." });
     }
 
     const role = invite.role === "owner" ? "owner" : "member";

@@ -1,5 +1,5 @@
 import type React from "react";
-import { useState, useEffect } from "react";
+import { useState, useEffect, useRef } from "react";
 import {
   ArrowRight,
   Sparkles,
@@ -18,16 +18,14 @@ import {
 } from "lucide-react";
 import { motion, AnimatePresence } from "motion/react";
 import type { ProjectFull, ChatMessage, TeamMember } from "../../types";
-import type { WindowType } from "../windowTypes";
 import { api } from "../../lib/api";
 import { HandoverPanel } from "./HandoverPanel";
 import { TasksPanel } from "./TasksPanel";
+import { ProjectFilesPanel } from "./ProjectFilesPanel";
 
 /** Projects window: list + detail view, create modal, and the Project Copilot. */
 export function ProjectsApp({
   showToast,
-  onOpenWindow,
-  onOpenProjectFiles,
   onOpenProjectMessages,
   initialProjectId = null,
   initialShowTasks = false,
@@ -35,9 +33,6 @@ export function ProjectsApp({
   initialCreating = false,
 }: {
   showToast: (msg: string) => void;
-  onOpenWindow: (type: WindowType) => void;
-  /** Open the File Vault pre-filtered to this project (numeric vault project id). */
-  onOpenProjectFiles?: (numericProjectId: number | null) => void;
   /** Open Messaging, preferring a conversation linked to this project. */
   onOpenProjectMessages?: (projectId: string) => void;
   /** Open directly into this project's detail view (e.g. from a Calendar entry). */
@@ -62,6 +57,8 @@ export function ProjectsApp({
   const [showTasks, setShowTasks] = useState(false);
   const [taskCount, setTaskCount] = useState<number | null>(null);
   const [conversationCount, setConversationCount] = useState<number | null>(null);
+  const [showFiles, setShowFiles] = useState(false);
+  const [fileCount, setFileCount] = useState<number | null>(null);
 
   const [newProject, setNewProject] = useState<Partial<ProjectFull>>({
     name: "",
@@ -76,9 +73,20 @@ export function ProjectsApp({
   const [editDraft, setEditDraft] = useState<ProjectFull | null>(null);
   const [savingEdit, setSavingEdit] = useState(false);
 
-  // Load projects from the SQLite-backed API so they survive a refresh.
+  // True once any create/update/archive has happened — guards against this
+  // initial fetch resolving *after* that mutation and silently overwriting
+  // the just-changed list with the pre-mutation server snapshot it fetched
+  // (a real race: this GET fires on mount, and if it's slow enough to still
+  // be in flight when a user creates a project, its late response would
+  // otherwise wipe the new project right back out of view).
+  const skipInitialLoad = useRef(false);
   useEffect(() => {
-    api.getProjects().then(setProjectsList).catch((e) => console.error("Failed to load projects", e));
+    api
+      .getProjects()
+      .then((list) => {
+        if (!skipInitialLoad.current) setProjectsList(list);
+      })
+      .catch((e) => console.error("Failed to load projects", e));
   }, []);
 
   // Resolve team chips (bare initials on the project) to real roster members
@@ -110,7 +118,9 @@ export function ProjectsApp({
     setShowTasks(selectedProject !== null && selectedProject.id === initialProjectId && initialShowTasks);
     setTaskCount(null);
     setConversationCount(null);
+    setFileCount(null);
     if (selectedProject) {
+      const numericId = Number(selectedProject.id.replace(/^p/, ""));
       api
         .getHandovers(selectedProject.id)
         .then((list) => setHandoverCount(list.length))
@@ -123,6 +133,10 @@ export function ProjectsApp({
         .getConversations()
         .then((list) => setConversationCount(list.filter((c) => c.linkedProjectId === selectedProject.id).length))
         .catch((e) => console.error("Failed to load conversation count", e));
+      api
+        .getFiles()
+        .then((list) => setFileCount(list.filter((f) => f.projectId === numericId).length))
+        .catch((e) => console.error("Failed to load file count", e));
     }
   }, [selectedProject?.id]);
 
@@ -142,13 +156,18 @@ export function ProjectsApp({
     };
     try {
       const saved = await api.createProject(p);
+      skipInitialLoad.current = true;
       setProjectsList((prev) => [saved, ...prev]);
+      setIsCreating(false);
+      setNewProject({ name: "", client: "", status: "Planning", deadline: "", progress: 0, tags: [] });
     } catch (e) {
       console.error("Failed to save project", e);
-      setProjectsList((prev) => [p, ...prev]); // still show it locally
+      showToast("Could not create the project — check your connection and try again");
+      // Deliberately does NOT close the modal or add a local-only fake entry:
+      // a project that only exists in this render and silently disappears on
+      // the next refresh is worse than an honest, visible failure. The
+      // user's typed input stays in the form so they can just retry.
     }
-    setIsCreating(false);
-    setNewProject({ name: "", client: "", status: "Planning", deadline: "", progress: 0, tags: [] });
   };
 
   const sendCopilotMessage = async (prompt: string, project: ProjectFull) => {
@@ -172,19 +191,29 @@ export function ProjectsApp({
     const statuses: ProjectFull["status"][] = ["Planning", "In Progress", "Review", "Archived"];
     const next = statuses[(statuses.indexOf(current.status) + 1) % statuses.length];
     const updated = { ...current, status: next };
+    skipInitialLoad.current = true;
     setProjectsList((prev) => prev.map((p) => (p.id === id ? updated : p)));
     if (selectedProject?.id === id) setSelectedProject(updated);
-    api.updateProject(id, { status: next }).catch((err) => console.error("Failed to persist status", err));
+    api.updateProject(id, { status: next }).catch((err) => {
+      console.error("Failed to persist status", err);
+      showToast("Could not save the status change");
+    });
   };
 
   const archiveProject = (id: string) => {
     const current = projectsList.find((p) => p.id === id);
     if (!current) return;
     const updated = { ...current, status: "Archived" as const };
+    skipInitialLoad.current = true;
     setProjectsList((prev) => prev.map((p) => (p.id === id ? updated : p)));
     if (selectedProject?.id === id) setSelectedProject(updated);
-    api.updateProject(id, { status: "Archived" }).catch((err) => console.error("Failed to archive project", err));
-    showToast("Project archived");
+    api
+      .updateProject(id, { status: "Archived" })
+      .then(() => showToast("Project archived"))
+      .catch((err) => {
+        console.error("Failed to archive project", err);
+        showToast("Could not archive the project");
+      });
   };
 
   const saveEdit = async () => {
@@ -198,6 +227,7 @@ export function ProjectsApp({
         deadline: editDraft.deadline.trim(),
         progress: Math.max(0, Math.min(100, editDraft.progress)),
       });
+      skipInitialLoad.current = true;
       setProjectsList((prev) => prev.map((p) => (p.id === saved.id ? saved : p)));
       if (selectedProject?.id === saved.id) setSelectedProject(saved);
       setEditDraft(null);
@@ -250,20 +280,20 @@ export function ProjectsApp({
   if (selectedProject) {
     return (
       <div className="flex flex-col h-full text-ink w-full relative">
-        <div className="flex items-center gap-4 mb-6 shrink-0">
+        <div className="flex flex-wrap items-center gap-4 mb-6 shrink-0">
           <button
             onClick={() => setSelectedProject(null)}
-            className="p-2 bg-panel hover:bg-chip rounded-full transition-colors group"
+            className="p-2 bg-panel hover:bg-chip rounded-full transition-colors group shrink-0"
           >
             <ArrowRight className="w-4 h-4 text-ink/60 group-hover:text-ink rotate-180" />
           </button>
-          <div>
+          <div className="min-w-0">
             <span className="text-[12.5px] text-muted">
               Projects / {selectedProject.client}
             </span>
-            <h2 className="text-[24px] font-bold leading-none mt-1.5">{selectedProject.name}</h2>
+            <h2 className="text-[24px] font-bold leading-none mt-1.5 truncate">{selectedProject.name}</h2>
           </div>
-          <div className="ml-auto flex items-center gap-2">
+          <div className="flex flex-wrap items-center gap-2 basis-full sm:basis-auto sm:ml-auto">
             <button
               onClick={() => setIsAiModalOpen(true)}
               className="flex items-center gap-2 px-4 py-2 bg-moss/10 hover:bg-moss/[0.16] rounded-full text-[13px] transition-colors font-medium text-moss"
@@ -285,7 +315,7 @@ export function ProjectsApp({
           </div>
         </div>
 
-        <div className="grid grid-cols-4 gap-3 mb-6 shrink-0">
+        <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 mb-6 shrink-0">
           <div className="bg-panel p-4 rounded-2xl">
             <span className="text-[13px] text-muted block mb-2.5">Status</span>
             <div
@@ -343,18 +373,8 @@ export function ProjectsApp({
                 icon: FileText,
                 iconClass: "p-3 bg-slate/10 text-slate rounded-lg group-hover:scale-110 transition-transform",
                 label: "Files & Assets",
-                count: `${selectedProject.linked.files} items`,
-                // Opens the File Vault pre-filtered to this project's files.
-                onClick: () => {
-                  const numericId = Number(selectedProject.id.replace(/^p/, ""));
-                  if (onOpenProjectFiles && Number.isFinite(numericId)) {
-                    onOpenProjectFiles(numericId);
-                    showToast(`Opening ${selectedProject.name}'s files…`);
-                  } else {
-                    onOpenWindow("files");
-                    showToast("Opening File Vault…");
-                  }
-                },
+                count: `${fileCount ?? selectedProject.linked.files} items`,
+                onClick: () => setShowFiles(true),
               },
               { icon: Target, iconClass: "p-3 bg-amber/10 text-amber rounded-lg group-hover:scale-110 transition-transform", label: "Tasks", count: `${taskCount ?? selectedProject.linked.tasks} items`, onClick: () => setShowTasks(true) },
               { icon: MessageSquare, iconClass: "p-3 bg-moss/10 text-moss rounded-lg group-hover:scale-110 transition-transform", label: "Messages", count: `${conversationCount ?? selectedProject.linked.messages} threads`, onClick: () => onOpenProjectMessages?.(selectedProject.id) },
@@ -590,6 +610,14 @@ export function ProjectsApp({
               project={selectedProject}
               onClose={() => setShowTasks(false)}
               onCountChange={setTaskCount}
+              showToast={showToast}
+            />
+          )}
+          {showFiles && (
+            <ProjectFilesPanel
+              project={selectedProject}
+              onClose={() => setShowFiles(false)}
+              onCountChange={setFileCount}
               showToast={showToast}
             />
           )}

@@ -1,5 +1,6 @@
 @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap');
 @import url('https://fonts.googleapis.com/css2?family=Newsreader:ital,wght@0,400;0,500;1,400;1,500&display=swap');
+@import url('https://fonts.googleapis.com/css2?family=Instrument+Sans:ital,wght@0,400..700;1,400..700&display=swap');
 @import "tailwindcss";
 
 /* Artific — kept available for the wordmark only. */
@@ -16,6 +17,8 @@
   --font-display: "Inter", ui-sans-serif, system-ui, sans-serif;
   --font-wordmark: "Artific", "Inter", ui-sans-serif, sans-serif;
   --font-serif: "Newsreader", "Inter", ui-serif, serif;
+  /* Marketing site only (landing + /pricing) — the dashboard keeps Inter throughout. */
+  --font-editorial: "Instrument Sans", "Inter", ui-sans-serif, sans-serif;
 
   /* Cool neutrals, white-dominant — flat grey canvas with white cards raised
      on shadow rather than color-fill layering (macOS Finder / Sequoia). Same
@@ -59,4 +62,61 @@ body {
    background pattern. */
 .mesh-bg {
   background-color: var(--color-paper);
+}
+
+/* ==========================================================================
+   Editorial — the marketing site's own token set (landing + /pricing only).
+   Deliberately separate from --color-* above rather than aliased onto it:
+   this palette has three ink levels plus an rgba hairline that don't map
+   1:1 onto the dashboard's single ink/muted/line triad, and keeping the
+   namespaces distinct means nothing here can ever bleed into the app shell.
+   Scoped to .editorial rather than :root so it only ever applies where a
+   marketing page explicitly opts in.
+   ========================================================================== */
+.editorial {
+  --ed-bg: #ffffff;
+  --ed-bg-alt: #f7f7f5;
+  --ed-ink: #0a0a0a;
+  --ed-ink-secondary: #5c5c5c;
+  /* Spec called for #9A9A9A, but that's 2.6:1 on --ed-bg-alt — the spec's own
+     accessibility rule (4.5:1 minimum) requires darkening it; this is the
+     lightest gray that still clears 4.5:1 against --ed-bg-alt. */
+  --ed-ink-tertiary: #6b6b6b;
+  --ed-hairline: rgba(0, 0, 0, 0.08);
+  --ed-invert-bg: #0a0a0a;
+  font-family: var(--font-editorial);
+  background-color: var(--ed-bg);
+  color: var(--ed-ink);
+}
+
+.editorial-invert {
+  --ed-bg: var(--ed-invert-bg);
+  --ed-bg-alt: #161616;
+  --ed-ink: #ffffff;
+  --ed-ink-secondary: #a3a3a3;
+  --ed-ink-tertiary: #808080;
+  --ed-hairline: rgba(255, 255, 255, 0.14);
+}
+
+@keyframes editorial-marquee {
+  from {
+    transform: translateX(0);
+  }
+  to {
+    transform: translateX(-50%);
+  }
+}
+
+.editorial-marquee-track {
+  animation: editorial-marquee 42s linear infinite;
+}
+
+.editorial-marquee-track:hover {
+  animation-play-state: paused;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .editorial-marquee-track {
+    animation: none;
+  }
 }

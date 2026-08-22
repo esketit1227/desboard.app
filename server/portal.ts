@@ -16,12 +16,15 @@ import {
   addComment,
   approveFile,
   requestChangesOnFile,
+  deleteComment,
   getApprovals,
   getFilesByIds,
   getComments,
   getHandoverByToken,
+  isClientVisible,
   isFileApproved,
   logPortalEvent,
+  updateCommentBody,
 } from "../db.ts";
 import type { Handover } from "../src/types.ts";
 import { renderHandoverPage } from "../src/lib/handoverPage.ts";
@@ -31,7 +34,7 @@ import {
   portalPasswordPage,
   portalRevokedPage,
 } from "../src/lib/portalStates.ts";
-import { readContentStream } from "./storage.ts";
+import { hasVersionContent, readContentStream, streamContentWithRange, streamVersionContentWithRange } from "./storage.ts";
 import {
   DOWNLOAD_URL_TTL_MS,
   accessState,
@@ -121,8 +124,15 @@ function requireSession(req: Request, res: Response, h: Handover): boolean {
   return false;
 }
 
+/**
+ * The set of a handover's files the portal is actually allowed to show — every
+ * download, preview, approve/request-changes, and comment target ultimately
+ * resolves through here (not the raw h.fileIds list), so a file the studio
+ * never tagged client-visible — or explicitly un-tagged later — genuinely
+ * disappears from the portal, not just from the file list UI.
+ */
 function filesOf(h: Handover) {
-  return getFilesByIds(h.fileIds);
+  return getFilesByIds(h.fileIds).filter((f) => isClientVisible(f.access));
 }
 
 /** A file's current version label, or null for files that predate version tracking — mirrors db.ts's internal currentVersionOf. */
@@ -159,7 +169,10 @@ export function createPortalRouter(): Router {
   const passwordLimiter = rateLimit({ windowMs: 15 * 60 * 1000, limit: 10, standardHeaders: true, legacyHeaders: false });
   const commentLimiter = rateLimit({ windowMs: 10 * 60 * 1000, limit: 20, standardHeaders: true, legacyHeaders: false });
   const downloadLimiter = rateLimit({ windowMs: 10 * 60 * 1000, limit: 60, standardHeaders: true, legacyHeaders: false });
-  const viewLimiter = rateLimit({ windowMs: 10 * 60 * 1000, limit: 200, standardHeaders: true, legacyHeaders: false });
+  // Higher than a single-shot image view needs: scrubbing a video issues a
+  // fresh Range request on every seek (often dozens in one review session),
+  // all against an already session-gated, same-visitor connection.
+  const viewLimiter = rateLimit({ windowMs: 10 * 60 * 1000, limit: 1000, standardHeaders: true, legacyHeaders: false });
   const approveLimiter = rateLimit({ windowMs: 10 * 60 * 1000, limit: 30, standardHeaders: true, legacyHeaders: false });
 
   // Portal pages are private-by-link: never indexed.
@@ -225,15 +238,18 @@ export function createPortalRouter(): Router {
   router.post("/api/portal/:token/comments", commentLimiter, (req, res) => {
     const h = resolve(req, res, false);
     if (!h || !requireSession(req, res, h)) return;
-    const { author, body, fileId, x, y } = req.body as {
+    const { author, body, fileId, x, y, timecode, version } = req.body as {
       author?: string;
       body?: string;
       fileId?: string | null;
       x?: unknown;
       y?: unknown;
+      timecode?: unknown;
+      version?: unknown;
     };
     if (!body || !body.trim()) return res.status(400).json({ error: "Message is required" });
-    const validFileId = fileId && h.fileIds.includes(fileId) ? fileId : null;
+    const targetFile = fileId ? filesOf(h).find((f) => f.id === fileId) : undefined;
+    const validFileId = targetFile ? targetFile.id : null;
 
     // A pin only makes sense attached to a specific file, and only within
     // the 0-100 percentage range the client-side pin picker can ever send.
@@ -241,6 +257,20 @@ export function createPortalRouter(): Router {
       typeof v === "number" && Number.isFinite(v) && v >= 0 && v <= 100 ? v : null;
     const pinX = validFileId ? validCoord(x) : null;
     const pinY = validFileId ? validCoord(y) : null;
+    // A video timecode pin — mutually exclusive with an x/y spatial pin, and
+    // only meaningful once we have a spot to attach it to.
+    const pinTimecode =
+      validFileId && typeof timecode === "number" && Number.isFinite(timecode) && timecode >= 0 ? timecode : null;
+    // Which round this pin is actually about — the version the client had open
+    // when they left it, not necessarily whatever's current by the time it's
+    // read back. Falls back to current for anything that doesn't name a real
+    // version of the file (older clients, general notes).
+    const pinVersion =
+      targetFile && typeof version === "string" && targetFile.versions.some((v) => v.version === version)
+        ? version
+        : targetFile
+          ? currentVersionOf(targetFile)
+          : null;
 
     // Role and visibility are forced server-side: a portal visitor can only
     // ever write a client-visible client comment.
@@ -253,11 +283,41 @@ export function createPortalRouter(): Router {
       fileId: validFileId,
       x: pinX !== null && pinY !== null ? pinX : null,
       y: pinX !== null && pinY !== null ? pinY : null,
+      timecode: pinX === null && pinY === null ? pinTimecode : null,
+      version: pinVersion,
       created: new Date().toISOString(),
       internalOnly: false,
     });
     audit(req, h, "comment", comment.id);
     res.status(201).json(toPortalCommentDTO(comment));
+  });
+
+  // Editing/deleting is scoped to role: 'client' only — a portal visitor can
+  // revise their own note, never the studio's side of the thread. There's no
+  // real per-visitor identity behind a shared link (same as posting itself),
+  // so this is the same trust boundary the rest of the portal already runs
+  // on, not a stronger one.
+  router.patch("/api/portal/:token/comments/:commentId", commentLimiter, (req, res) => {
+    const h = resolve(req, res, false);
+    if (!h || !requireSession(req, res, h)) return;
+    const existing = getComments(h.id).find((c) => c.id === req.params.commentId);
+    if (!existing || existing.role !== "client") return res.status(404).json({ error: "Note not found" });
+    const { body } = req.body as { body?: string };
+    if (!body || !body.trim()) return res.status(400).json({ error: "Message is required" });
+    const updated = updateCommentBody(existing.id, body.trim().slice(0, 4000));
+    if (!updated) return res.status(404).json({ error: "Note not found" });
+    audit(req, h, "comment_edit", updated.id);
+    res.json(toPortalCommentDTO(updated));
+  });
+
+  router.delete("/api/portal/:token/comments/:commentId", commentLimiter, (req, res) => {
+    const h = resolve(req, res, false);
+    if (!h || !requireSession(req, res, h)) return;
+    const existing = getComments(h.id).find((c) => c.id === req.params.commentId);
+    if (!existing || existing.role !== "client") return res.status(404).json({ error: "Note not found" });
+    deleteComment(existing.id);
+    audit(req, h, "comment_delete", existing.id);
+    res.status(204).end();
   });
 
   // --- Approvals ---------------------------------------------------------
@@ -323,12 +383,22 @@ export function createPortalRouter(): Router {
     const fileId = req.params.fileId;
     if (!h.fileIds.includes(fileId)) return res.status(404).type("text").send("File not found in this delivery.");
     const file = filesOf(h).find((f) => f.id === fileId);
-    if (!file || !file.hasContent) return res.status(404).type("text").send("No preview available for this file.");
+    if (!file) return res.status(404).type("text").send("File not found in this delivery.");
 
+    // ?v= requests a specific past round instead of the current blob — what
+    // the version picker uses so a client can review or compare an earlier
+    // version, not just whatever's latest.
+    const version = typeof req.query.v === "string" ? req.query.v : null;
+    if (version) {
+      if (!file.versions.some((v) => v.version === version)) return res.status(404).type("text").send("Version not found.");
+      if (!hasVersionContent(file.id, version)) return res.status(404).type("text").send("No stored content for this version.");
+      audit(req, h, "view_file", `${file.name} (${version})`);
+      return streamVersionContentWithRange(req, res, file.id, version, file.mime || "application/octet-stream");
+    }
+
+    if (!file.hasContent) return res.status(404).type("text").send("No preview available for this file.");
     audit(req, h, "view_file", file.name);
-    res.setHeader("Content-Type", file.mime || "application/octet-stream");
-    res.setHeader("Content-Disposition", "inline");
-    readContentStream(file.id).on("error", () => res.status(404).end()).pipe(res);
+    streamContentWithRange(req, res, file.id, file.mime || "application/octet-stream");
   });
 
   // --- Downloads (signed, short-lived, revocation-aware) ---------------------

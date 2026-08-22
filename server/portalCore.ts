@@ -125,6 +125,7 @@ export function toPortalFileDTO(f: VaultFile): PortalFileDTO {
     size: f.size,
     status: f.status,
     tags: f.tags,
+    versions: f.versions,
   };
 }
 
@@ -137,6 +138,8 @@ export function toPortalCommentDTO(c: HandoverComment): PortalCommentDTO {
     fileId: c.fileId ?? null,
     x: typeof c.x === "number" ? c.x : null,
     y: typeof c.y === "number" ? c.y : null,
+    timecode: typeof c.timecode === "number" ? c.timecode : null,
+    version: c.version ?? null,
     created: c.created,
   };
 }
