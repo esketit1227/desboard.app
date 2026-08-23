@@ -171,8 +171,8 @@ export function EditorialHero() {
           From kickoff to handoff.
         </h1>
         <p className="text-[18px] sm:text-[20px] leading-[1.5] tracking-[-0.005em] text-[var(--ed-ink-secondary)] mt-7 max-w-[46ch]">
-          Projects, files, and approvals in one place — handed off through a portal your clients actually enjoy
-          opening.
+          Keep projects, files, and approvals in one place, then hand it off through a portal your clients actually
+          enjoy opening.
         </p>
         <div className="flex items-center gap-6 flex-wrap mt-9">
           <a
@@ -322,8 +322,8 @@ export function KeyFeatures() {
             Everything you&#8217;ve ever made, finally findable.
           </h2>
           <p className="text-[17px] leading-[1.6] text-[var(--ed-ink-secondary)] mt-1">
-            Desboard sits on top of the storage your studio already pays for &mdash; and turns it into a searchable
-            archive, a review room and a client-facing delivery surface.
+            Desboard sits on top of the storage your studio already pays for, then turns it into a searchable
+            archive, a review room, and a client-facing delivery surface.
           </p>
         </div>
       </Reveal>
@@ -356,7 +356,7 @@ export function KeyFeatures() {
             </div>
             <FeatureCopy
               title="Link what you already use"
-              body="Google Drive, Dropbox and OneDrive in about ninety seconds. Files stay in your own accounts — Desboard stores references, not duplicates."
+              body="Google Drive, Dropbox, and OneDrive in about ninety seconds. Files stay in your own accounts. Desboard stores references, not duplicates."
             />
           </FeatureCell>
 
@@ -385,7 +385,7 @@ export function KeyFeatures() {
             </div>
             <FeatureCopy
               title="Find anything you&#8217;ve ever made"
-              body="Search every connected cloud from one place — including the years of work that never passed through a review tool. Ask for it the way you remember it."
+              body="Search every connected cloud from one place, including the years of work that never passed through a review tool. Ask for it the way you remember it."
             />
           </FeatureCell>
 
@@ -411,7 +411,7 @@ export function KeyFeatures() {
             </div>
             <FeatureCopy
               title="Know what&#8217;s approved"
-              body="Version history that traces a source file to the export the client actually received. See where an asset is used before you change it — health checks catch the rest."
+              body="Version history traces a source file all the way to the export the client actually received. See where an asset is used before you touch it. Health checks catch the rest."
             />
           </FeatureCell>
 
@@ -443,7 +443,7 @@ export function KeyFeatures() {
             </div>
             <FeatureCopy
               title="Review in one place"
-              body="Comment on a region of an image, a page of a PDF or a timestamp in a video. Every approval recorded with who, when and which version — permanently."
+              body="Comment on a region of an image, a page of a PDF, or a timestamp in a video. Every approval is recorded for good: who, when, and which version."
             />
           </FeatureCell>
 
@@ -456,7 +456,7 @@ export function KeyFeatures() {
                     desboard
                   </span>
                 </div>
-                <div className="text-[15px] font-medium text-white">Packaging &mdash; final dielines</div>
+                <div className="text-[15px] font-medium text-white">Packaging: final dielines</div>
                 <div className="flex gap-2">
                   <span className="border border-white/20 rounded-full px-2.5 py-1 text-[11px] text-white/70">
                     studio.yourdomain.com
@@ -538,7 +538,7 @@ export function StudioAtmosphere() {
           Made for studios that sweat the details.
         </p>
         <p className="text-[16px] text-[var(--ed-ink-secondary)] leading-[1.5] mt-4">
-          The kind of work that happens after the brief is done — refining, versioning, and handing off something a
+          The kind of work that happens after the brief is done: refining, versioning, and handing off something a
           client is proud to receive.
         </p>
       </Reveal>
@@ -591,7 +591,7 @@ interface ProductBlockData {
 const PRODUCT_BLOCKS: ProductBlockData[] = [
   {
     eyebrow: "Client Portal",
-    heading: "Send finished work through a page clients open, review, and approve — no login required.",
+    heading: "Send finished work through a page clients can open, review, and approve. No login required.",
     link: "Explore the portal",
     image: "/marketing/portal.png",
     imageAlt: "A branded client handover page showing deliverables, statuses, and approve/request-changes actions",
@@ -605,7 +605,7 @@ const PRODUCT_BLOCKS: ProductBlockData[] = [
   },
   {
     eyebrow: "File Vault",
-    heading: "Every version kept, every file findable — organized the way a studio actually works.",
+    heading: "Every version kept, every file findable, all organized the way a studio actually works.",
     link: "Explore File Vault",
     image: "/marketing/filevault.png",
     imageAlt: "The File Vault file grid showing versioned files, tags, and statuses for a client project",
@@ -625,7 +625,7 @@ const PRODUCT_BLOCKS: ProductBlockData[] = [
     imageAlt: "The Team roster showing studio members with their roles",
     mediaFirst: false,
     capabilities: [
-      { verb: "Invite", phrase: "a link, an email, a seat — nothing to configure" },
+      { verb: "Invite", phrase: "a link, an email, a seat, nothing to configure" },
       { verb: "Assign", phrase: "owners and members see exactly what they need" },
       { verb: "Share", phrase: "one calendar and message thread per project" },
       { verb: "Scale", phrase: "from one seat to a full production team" },
@@ -742,7 +742,7 @@ export function UpdateSpotlight() {
             AI search, built in.
           </h2>
           <p className="text-[17px] text-[var(--ed-ink-secondary)] mt-5 max-w-[50ch] mx-auto leading-[1.5]">
-            Find any file by describing it — new uploads get tagged automatically the moment they land in the vault.
+            Find any file by describing it. New uploads get tagged automatically the moment they land in the vault.
           </p>
           <div className="mt-9">
             <ArrowLink href="/pricing">See plans</ArrowLink>
@@ -765,7 +765,7 @@ const CAROUSEL_SLIDES: { title: string; body: string; video?: string }[] = [
   },
   {
     title: "White-label portal",
-    body: "Put your studio's name on the door — custom accent color, logo, and branding on every client page.",
+    body: "Put your studio's name on the door: custom accent color, logo, and branding on every client page.",
   },
   {
     title: "Version history",
@@ -773,7 +773,7 @@ const CAROUSEL_SLIDES: { title: string; body: string; video?: string }[] = [
   },
   {
     title: "Cloud connections",
-    body: "Pull files straight from Google Drive, Dropbox, or OneDrive — nothing to re-upload.",
+    body: "Pull files straight from Google Drive, Dropbox, or OneDrive. Nothing to re-upload.",
   },
   {
     title: "Roles & permissions",
@@ -891,7 +891,7 @@ export function LandingPricingTeaser() {
 const FAQ: { q: string; a: string }[] = [
   {
     q: "Do I need a card to start?",
-    a: "No. Every workspace gets a 14-day trial with the full Studio feature set — no card required.",
+    a: "No. Every workspace gets a 14-day trial with the full Studio feature set. No card required.",
   },
   {
     q: "What happens when the trial ends?",
@@ -899,11 +899,11 @@ const FAQ: { q: string; a: string }[] = [
   },
   {
     q: "Can I switch plans later?",
-    a: "Yes — upgrade, downgrade, or cancel any time from Settings. Changes are prorated automatically.",
+    a: "Yes. Upgrade, downgrade, or cancel any time from Settings. Changes are prorated automatically.",
   },
   {
     q: "What does my client see?",
-    a: "Only the branded handover portal you send them — never your File Vault, other clients, or internal workspace.",
+    a: "Only the branded handover portal you send them. Never your File Vault, other clients, or internal workspace.",
   },
 ];
 
