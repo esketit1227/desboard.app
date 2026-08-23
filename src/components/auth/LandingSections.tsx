@@ -369,8 +369,18 @@ export function KeyFeatures() {
                 <div className="w-px h-[18px] border-l border-dashed border-[var(--ed-hairline)]" />
               </div>
               <div className="grid grid-cols-2 gap-2.5">
-                <div className="aspect-[4/3] rounded-[10px] bg-[var(--ed-bg-alt)]" />
-                <div className="aspect-[4/3] rounded-[10px] bg-[var(--ed-bg-alt)]" />
+                <img
+                  src="/marketing/keyfeatures-search-1.webp"
+                  alt="A moody kitchen interior, the kind of shot a studio would archive for a client job"
+                  loading="lazy"
+                  className="aspect-[4/3] rounded-[10px] object-cover w-full h-full"
+                />
+                <img
+                  src="/marketing/keyfeatures-search-2.webp"
+                  alt="A second kitchen interior shot from the same client job"
+                  loading="lazy"
+                  className="aspect-[4/3] rounded-[10px] object-cover w-full h-full"
+                />
               </div>
               <div className="flex gap-1.5 flex-wrap">
                 {["AI tags", "OCR", "Duplicates", "Visual match"].map((t) => (
@@ -430,7 +440,12 @@ export function KeyFeatures() {
                   Approved
                 </span>
               </div>
-              <div className="rounded-xl h-[104px] bg-[var(--ed-bg-alt)]" />
+              <img
+                src="/marketing/keyfeatures-review.jpg"
+                alt="A product photo under review, the kind of asset a client leaves feedback on"
+                loading="lazy"
+                className="rounded-xl h-[104px] w-full object-cover"
+              />
               <div className="bg-[var(--ed-bg)] border border-[var(--ed-hairline)] rounded-xl px-4 py-3 flex gap-2.5 items-start">
                 <span className="shrink-0 w-5 h-5 rounded-full bg-[var(--ed-ink)] text-white text-[11px] font-medium flex items-center justify-center">
                   1
