@@ -44,10 +44,10 @@ export function TeamApp({ showToast }: { showToast: (msg: string) => void }) {
       };
       if (editing === "new") {
         await api.createTeamMember(payload);
-        showToast("Team member added");
+        showToast("Added to the roster");
       } else if (editing) {
         await api.updateTeamMember(editing.id, payload);
-        showToast("Team member updated");
+        showToast("Roster entry updated");
       }
       setEditing(null);
       await refresh();
@@ -89,7 +89,7 @@ export function TeamApp({ showToast }: { showToast: (msg: string) => void }) {
 
       {members.length === 0 ? (
         <div className="text-center py-16 border border-dashed border-line rounded-2xl">
-          <p className="text-[13px] text-ink/70 mb-1">No team members yet</p>
+          <p className="text-[13px] text-ink/70 mb-1">No one on the roster yet</p>
           <p className="text-[12.5px] text-muted">Add one to start building your roster.</p>
         </div>
       ) : (

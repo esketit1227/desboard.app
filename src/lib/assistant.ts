@@ -54,7 +54,7 @@ export async function streamAssistant(messages: AssistantMessage[], h: StreamHan
   }
 
   if (res.status === 503) {
-    h.onError("AI is not configured — add your ANTHROPIC_API_KEY to .env and restart the server.", "unconfigured");
+    h.onError("AI features aren't available on this workspace right now.", "unconfigured");
     return;
   }
   if (res.status === 429) {

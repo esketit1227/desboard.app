@@ -30,6 +30,7 @@ import type {
   Handover,
   HandoverStatus,
   HandoverBranding,
+  HandoverTemplate,
   HandoverComment,
   HandoverApprovals,
   HandoverFileApproval,
@@ -40,8 +41,27 @@ import { api } from "../../lib/api";
 import { renderHandoverPage, effectiveBranding } from "../../lib/handoverPage";
 import { isApprovalCurrent } from "../../lib/filePreview";
 import { HandoverFileRow } from "./HandoverFileRow";
+import { TemplateThumbnail } from "../TemplateThumbnail";
 
 const ACCENT_SWATCHES = ["#D85E25", "#34A853", "#4285F4", "#9C27B0", "#E91E63", "#0EA5E9", "#EAB308", "#111111"];
+
+const TEMPLATE_OPTIONS: { value: HandoverTemplate; label: string; blurb: string }[] = [
+  { value: "editorial", label: "Editorial", blurb: "Quiet, magazine-like" },
+  { value: "minimal", label: "Minimal", blurb: "Flat, understated" },
+  { value: "bold", label: "Bold", blurb: "Big type, confident" },
+  { value: "ledger", label: "Ledger", blurb: "Tractor-feed paper, mono" },
+  { value: "terminal", label: "Terminal", blurb: "Dark HUD, mission control" },
+  { value: "broadsheet", label: "Broadsheet", blurb: "Newsprint masthead" },
+  { value: "boarding-pass", label: "Boarding Pass", blurb: "Ticket stub, barcode" },
+  { value: "zine", label: "Zine", blurb: "Punk flyer, loud color" },
+  { value: "friendly", label: "Friendly", blurb: "Soft, rounded, approachable" },
+  { value: "gallery", label: "Gallery", blurb: "Museum wall label" },
+  { value: "blueprint", label: "Blueprint", blurb: "Technical spec sheet" },
+  { value: "swiss", label: "Swiss", blurb: "Grid, numerals, one accent" },
+  { value: "app", label: "App", blurb: "Bold color, rounded type" },
+  { value: "letterhead", label: "Letterhead", blurb: "Elegant serif, thin rules" },
+  { value: "manifest", label: "Manifest", blurb: "Business record, tabular" },
+];
 
 /** Seconds -> "m:ss" — mirrors the format used on the portal's video scrubber and pin badges. */
 function fmtTimecode(totalSeconds: number): string {
@@ -283,7 +303,13 @@ export function HandoverPanel({
       accessMode: "invite",
       revoked: false,
       branding: settings
-        ? { accent: settings.brandAccent, theme: settings.brandTheme, studioName: settings.studioName, logoUrl: settings.logoUrl }
+        ? {
+            accent: settings.brandAccent,
+            theme: settings.brandTheme,
+            template: settings.brandTemplate,
+            studioName: settings.studioName,
+            logoUrl: settings.logoUrl,
+          }
         : undefined,
     };
     try {
@@ -1077,10 +1103,33 @@ export function HandoverPanel({
                           </button>
                         </div>
                       </div>
+
+                      <div>
+                        <label className="text-[13px] text-muted block mb-2">Template</label>
+                        <div className="grid grid-cols-2 gap-2">
+                          {TEMPLATE_OPTIONS.map((t) => (
+                            <button
+                              key={t.value}
+                              onClick={() => setBrand({ ...brand, template: t.value })}
+                              className={`text-left p-1.5 rounded-lg border transition-colors ${
+                                brand.template === t.value ? "border-primary/50 bg-primary/10" : "border-line bg-chip hover:bg-line"
+                              }`}
+                            >
+                              <TemplateThumbnail template={t.value} accent={brand.accent} theme={brand.theme} width={148} height={104} />
+                              <div className={`text-[13px] font-medium mt-1.5 ${brand.template === t.value ? "text-primary" : "text-ink"}`}>
+                                {t.label}
+                              </div>
+                              <div className="text-[11.5px] text-muted">{t.blurb}</div>
+                            </button>
+                          ))}
+                        </div>
+                      </div>
                     </div>
 
-                    {/* Live preview — genuine client-facing output, left as its own visual system */}
-                    <div className="flex flex-col gap-2">
+                    {/* Live preview — genuine client-facing output, left as its own visual system.
+                        Sticky + self-start so it stays in view while the (usually taller) controls
+                        column on the left scrolls past it. */}
+                    <div className="flex flex-col gap-2 self-start sticky top-4">
                       <div className="flex items-center justify-between">
                         <span className="text-[13px] font-medium text-ink">Live preview</span>
                         <button

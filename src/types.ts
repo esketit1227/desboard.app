@@ -52,7 +52,6 @@ export interface ProjectLinked {
   files: number;
   tasks: number;
   messages: number;
-  invoices: number;
   handovers: number;
 }
 
@@ -80,11 +79,31 @@ export type HandoverStatus = "Draft" | "Sent" | "Accepted";
 /** How a client gets into a handover's portal page. */
 export type PortalAccessMode = "invite" | "password" | "public";
 
+/** Which visual treatment the portal page renders with — see handoverPage.ts's per-template CSS. */
+export type HandoverTemplate =
+  | "editorial"
+  | "minimal"
+  | "bold"
+  | "ledger"
+  | "terminal"
+  | "broadsheet"
+  | "boarding-pass"
+  | "zine"
+  | "friendly"
+  | "gallery"
+  | "blueprint"
+  | "swiss"
+  | "app"
+  | "letterhead"
+  | "manifest";
+
 /** Branding for a handover's shareable client-facing landing page. */
 export interface HandoverBranding {
   /** Accent color (hex, e.g. "#D85E25"). */
   accent: string;
   theme: "dark" | "light";
+  /** Visual layout/type treatment; defaults to "editorial" when unset. */
+  template: HandoverTemplate;
   /** Studio / sender name shown in the header. */
   studioName: string;
   /** Optional logo, as a data URL or an image URL. */
@@ -446,6 +465,7 @@ export interface StudioSettings {
   logoUrl?: string;
   brandAccent: string;
   brandTheme: "dark" | "light";
+  brandTemplate: HandoverTemplate;
 }
 
 /** The signed-in studio user, as returned by /api/auth/{signup,login,me}. */

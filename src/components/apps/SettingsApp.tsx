@@ -1,10 +1,29 @@
 import { useState, useEffect } from "react";
 import { Sun, Moon, AlertTriangle, Users } from "lucide-react";
-import type { StudioSettings, AuthUser, WorkspaceMember, PendingInvite, WorkspaceRole, BillingStatus } from "../../types";
+import type { StudioSettings, AuthUser, WorkspaceMember, PendingInvite, WorkspaceRole, BillingStatus, HandoverTemplate } from "../../types";
 import { api } from "../../lib/api";
 import { PricingCards } from "../PricingCards";
+import { TemplateThumbnail } from "../TemplateThumbnail";
 
 const ACCENT_SWATCHES = ["#D85E25", "#2F9463", "#4C6B93", "#B8791E", "#9C27B0", "#000000"];
+
+const TEMPLATE_OPTIONS: { value: HandoverTemplate; label: string; blurb: string }[] = [
+  { value: "editorial", label: "Editorial", blurb: "Quiet, magazine-like" },
+  { value: "minimal", label: "Minimal", blurb: "Flat, understated" },
+  { value: "bold", label: "Bold", blurb: "Big type, confident" },
+  { value: "ledger", label: "Ledger", blurb: "Tractor-feed paper, mono" },
+  { value: "terminal", label: "Terminal", blurb: "Dark HUD, mission control" },
+  { value: "broadsheet", label: "Broadsheet", blurb: "Newsprint masthead" },
+  { value: "boarding-pass", label: "Boarding Pass", blurb: "Ticket stub, barcode" },
+  { value: "zine", label: "Zine", blurb: "Punk flyer, loud color" },
+  { value: "friendly", label: "Friendly", blurb: "Soft, rounded, approachable" },
+  { value: "gallery", label: "Gallery", blurb: "Museum wall label" },
+  { value: "blueprint", label: "Blueprint", blurb: "Technical spec sheet" },
+  { value: "swiss", label: "Swiss", blurb: "Grid, numerals, one accent" },
+  { value: "app", label: "App", blurb: "Bold color, rounded type" },
+  { value: "letterhead", label: "Letterhead", blurb: "Elegant serif, thin rules" },
+  { value: "manifest", label: "Manifest", blurb: "Business record, tabular" },
+];
 
 /** Workspace-level usage can reach GB/TB (unlike a single file's size), so this scales further than server/storage.ts's own formatBytes. */
 function formatBytes(n: number): string {
@@ -61,9 +80,10 @@ export function SettingsApp({
 }) {
   const [settings, setSettings] = useState<StudioSettings | null>(null);
   const [profileDraft, setProfileDraft] = useState({ studioName: "", defaultOwner: "" });
-  const [brandDraft, setBrandDraft] = useState<{ brandAccent: string; brandTheme: "dark" | "light" }>({
+  const [brandDraft, setBrandDraft] = useState<{ brandAccent: string; brandTheme: "dark" | "light"; brandTemplate: HandoverTemplate }>({
     brandAccent: "#2c2c2e",
     brandTheme: "light",
+    brandTemplate: "editorial",
   });
   const [savingProfile, setSavingProfile] = useState(false);
   const [savingBrand, setSavingBrand] = useState(false);
@@ -87,7 +107,7 @@ export function SettingsApp({
       .then((s) => {
         setSettings(s);
         setProfileDraft({ studioName: s.studioName, defaultOwner: s.defaultOwner });
-        setBrandDraft({ brandAccent: s.brandAccent, brandTheme: s.brandTheme });
+        setBrandDraft({ brandAccent: s.brandAccent, brandTheme: s.brandTheme, brandTemplate: s.brandTemplate });
       })
       .catch((e) => console.error("Failed to load settings", e));
 
@@ -431,6 +451,32 @@ export function SettingsApp({
                 </button>
               ))}
             </div>
+          </div>
+        </div>
+        <div className="mb-5">
+          <label className="text-[13px] text-muted block mb-2">Template</label>
+          <div className="grid grid-cols-3 sm:grid-cols-5 gap-2 max-w-3xl">
+            {TEMPLATE_OPTIONS.map((t) => (
+              <button
+                key={t.value}
+                onClick={() => setBrandDraft((d) => ({ ...d, brandTemplate: t.value }))}
+                className={`text-left p-1.5 rounded-lg border transition-colors ${
+                  brandDraft.brandTemplate === t.value ? "border-primary/50 bg-primary/10" : "border-line bg-surface hover:bg-chip"
+                }`}
+              >
+                <TemplateThumbnail
+                  template={t.value}
+                  accent={brandDraft.brandAccent}
+                  theme={brandDraft.brandTheme}
+                  width={140}
+                  height={98}
+                />
+                <div className={`text-[13px] font-medium mt-1.5 ${brandDraft.brandTemplate === t.value ? "text-primary" : "text-ink"}`}>
+                  {t.label}
+                </div>
+                <div className="text-[11.5px] text-muted">{t.blurb}</div>
+              </button>
+            ))}
           </div>
         </div>
         <button

@@ -26,6 +26,7 @@ import { AssistantBox } from "../components/assistant/AssistantBox";
 import { ActivityList } from "../components/home/ActivityList";
 import { InsightRail } from "../components/home/InsightRail";
 import { CelebrationBanner } from "../components/home/CelebrationBanner";
+import { TrialBanner } from "../components/home/TrialBanner";
 import { ProjectsApp } from "../components/apps/ProjectsApp";
 import { FileVaultApp } from "../components/apps/FileVaultApp";
 import { ClientPortalApp } from "../components/apps/ClientPortalApp";
@@ -74,7 +75,7 @@ const NAV_ITEMS: NavItem[] = [
   { key: "client", label: "Client Portal", icon: Users, kind: "app" },
   { key: "calendar", label: "Calendar", icon: CalendarIcon, kind: "app" },
   { key: "messaging", label: "Messaging", icon: MessageSquare, kind: "app" },
-  { key: "team", label: "Team", icon: Contact, kind: "app" },
+  { key: "team", label: "Roster", icon: Contact, kind: "app" },
   { key: "connections", label: "Connections", icon: Cloud, kind: "app" },
   { key: "settings", label: "Settings", icon: SettingsIcon, kind: "app" },
 ];
@@ -562,6 +563,8 @@ export function Dashboard() {
                         <div className="h-[35px] w-2/3 bg-chip rounded animate-pulse" />
                       )}
                     </div>
+
+                    <TrialBanner onOpenBilling={() => openWindow("settings")} />
 
                     {dash && (
                       // Always mounted once dash data exists (even with zero completions) —

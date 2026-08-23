@@ -9,7 +9,6 @@ import {
   FileText,
   Target,
   MessageSquare,
-  CreditCard,
   Package,
   Plus,
   Search,
@@ -152,7 +151,7 @@ export function ProjectsApp({
       team: ["You"],
       tags: newProject.tags || [],
       progress: 0,
-      linked: { files: 0, tasks: 0, messages: 0, invoices: 0, handovers: 0 },
+      linked: { files: 0, tasks: 0, messages: 0, handovers: 0 },
     };
     try {
       const saved = await api.createProject(p);
@@ -378,7 +377,6 @@ export function ProjectsApp({
               },
               { icon: Target, iconClass: "p-3 bg-amber/10 text-amber rounded-lg group-hover:scale-110 transition-transform", label: "Tasks", count: `${taskCount ?? selectedProject.linked.tasks} items`, onClick: () => setShowTasks(true) },
               { icon: MessageSquare, iconClass: "p-3 bg-moss/10 text-moss rounded-lg group-hover:scale-110 transition-transform", label: "Messages", count: `${conversationCount ?? selectedProject.linked.messages} threads`, onClick: () => onOpenProjectMessages?.(selectedProject.id) },
-              { icon: CreditCard, iconClass: "p-3 bg-slate/10 text-slate rounded-lg group-hover:scale-110 transition-transform", label: "Invoices & Finance", count: `${selectedProject.linked.invoices} records`, onClick: () => showToast("Invoices & Finance — coming soon") },
               { icon: Package, iconClass: "p-3 bg-primary/10 text-primary rounded-lg group-hover:scale-110 transition-transform", label: "Handovers", count: `${handoverCount ?? selectedProject.linked.handovers} packages`, onClick: () => setShowHandovers(true) },
             ].map((item) => (
               <div

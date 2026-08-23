@@ -1,5 +1,5 @@
 import { useState, useEffect } from "react";
-import { FileText, Download, CreditCard, CheckCircle, Link as LinkIcon, Package } from "lucide-react";
+import { FileText, Download, CheckCircle, Link as LinkIcon, Package } from "lucide-react";
 import { AnimatePresence } from "motion/react";
 import type { ProjectFull, Handover, VaultFile, StudioSettings } from "../../types";
 import { api } from "../../lib/api";
@@ -39,7 +39,7 @@ export function ClientPortalApp({ showToast }: { showToast: (msg: string) => voi
     }
   };
 
-  const [activeTab, setActiveTab] = useState<"timeline" | "files" | "invoices">("timeline");
+  const [activeTab, setActiveTab] = useState<"timeline" | "files">("timeline");
 
   // Handovers (real feature) — pick a project, then manage its packages / branded
   // page / client discussion via the shared HandoverPanel.
@@ -227,7 +227,7 @@ export function ClientPortalApp({ showToast }: { showToast: (msg: string) => voi
                 <div className="text-white/40 text-[12px] uppercase tracking-widest">{portalTitle}</div>
               </div>
               <div className="flex gap-4 border border-white/10 rounded-full p-1 bg-black/20">
-                {["timeline", "files", "invoices"].map((tab) => (
+                {["timeline", "files"].map((tab) => (
                   <button
                     key={tab}
                     onClick={() => setActiveTab(tab as any)}
@@ -352,16 +352,6 @@ export function ClientPortalApp({ showToast }: { showToast: (msg: string) => voi
                       </div>
                     ))
                   )}
-                </div>
-              )}
-
-              {activeTab === "invoices" && (
-                <div className="flex flex-col items-center justify-center h-full text-center py-12 md:py-20">
-                  <CreditCard className="w-12 h-12 text-white/20 mb-6" />
-                  <span className="text-[14px] uppercase tracking-widest text-white/80 mb-2 font-display">
-                    No Invoices Due
-                  </span>
-                  <span className="text-[12px] text-white/40">All payments are up to date.</span>
                 </div>
               )}
             </div>

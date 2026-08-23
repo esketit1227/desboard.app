@@ -17,6 +17,7 @@ import {
   EditorialNav,
   EditorialHero,
   IntegrationMarquee,
+  KeyFeatures,
   StudioAtmosphere,
   ProductBlocks,
   PrincipleQuote,
@@ -72,6 +73,7 @@ export function AuthGate({ children }: { children: ReactNode }) {
         <EditorialHero />
 
         <IntegrationMarquee />
+        <KeyFeatures />
         <StudioAtmosphere />
         <ProductBlocks />
         <PrincipleQuote />

@@ -993,7 +993,7 @@ async function startServer() {
     const { prompt, fileContext } = req.body as { prompt: string; fileContext?: unknown };
     if (!anthropic) {
       return res.status(503).json({
-        error: "AI is not configured. Add ANTHROPIC_API_KEY to your .env file and restart the server.",
+        error: "AI features aren't available on this workspace right now.",
       });
     }
     if (!prompt || !prompt.trim()) return res.status(400).json({ error: "Missing prompt" });
@@ -1044,7 +1044,7 @@ async function startServer() {
     }
     if (!anthropic) {
       return res.status(503).json({
-        error: "AI is not configured. Add ANTHROPIC_API_KEY to your .env file and restart the server.",
+        error: "AI features aren't available on this workspace right now.",
       });
     }
 
@@ -1167,7 +1167,7 @@ async function startServer() {
     const { messages } = req.body as { messages?: { role: string; text: string }[] };
     if (!anthropic) {
       return res.status(503).json({
-        error: "AI is not configured. Add ANTHROPIC_API_KEY to your .env file and restart the server.",
+        error: "AI features aren't available on this workspace right now.",
       });
     }
     if (!Array.isArray(messages) || messages.length === 0 || !messages[messages.length - 1]?.text?.trim()) {

@@ -58,8 +58,10 @@ import type {
   WorkspaceMember,
   PendingInvite,
   PlanTier,
+  HandoverTemplate,
 } from "./src/types.ts";
 import { computeEffectiveTier, type EffectiveTier, type WorkspaceBillingRow } from "./server/billingCore.ts";
+import { TEMPLATES as HANDOVER_TEMPLATES } from "./src/lib/handoverPage.ts";
 
 // DATA_DIR lets a deployment point the database at a mounted persistent
 // volume (e.g. Railway/Fly) instead of the app's own working directory,
@@ -232,12 +234,13 @@ db.exec(`
 
   -- One row per workspace (was a global singleton before multi-tenancy).
   CREATE TABLE IF NOT EXISTS settings (
-    workspace_id  TEXT PRIMARY KEY,
-    studio_name   TEXT,
-    default_owner TEXT,
-    logo_url      TEXT,
-    brand_accent  TEXT,
-    brand_theme   TEXT
+    workspace_id   TEXT PRIMARY KEY,
+    studio_name    TEXT,
+    default_owner  TEXT,
+    logo_url       TEXT,
+    brand_accent   TEXT,
+    brand_theme    TEXT,
+    brand_template TEXT
   );
 
   CREATE TABLE IF NOT EXISTS tasks (
@@ -348,6 +351,16 @@ db.exec(`
   if (!cols.some((col) => col.name === "branding")) {
     db.exec(`ALTER TABLE handovers ADD COLUMN branding TEXT`);
     console.log("[db] Migrated: added handovers.branding column.");
+  }
+}
+
+// Migration: add the `brand_template` column to settings tables created
+// before the multi-template portal page existed.
+{
+  const cols = db.prepare(`PRAGMA table_info(settings)`).all() as { name: string }[];
+  if (cols.length && !cols.some((col) => col.name === "brand_template")) {
+    db.exec(`ALTER TABLE settings ADD COLUMN brand_template TEXT`);
+    console.log("[db] Migrated: added settings.brand_template column.");
   }
 }
 
@@ -687,17 +700,17 @@ const SEED_PROJECTS: ProjectFull[] = [
   {
     id: "p1", name: "Nebula Rebranding", client: "Nebula Inc.", status: "In Progress",
     deadline: "Nov 15, 2026", owner: "Elias M.", team: ["EM", "SK", "JD"], tags: ["Brand", "Web", "UI"],
-    progress: 65, linked: { files: 12, tasks: 34, messages: 89, invoices: 2, handovers: 0 },
+    progress: 65, linked: { files: 12, tasks: 34, messages: 89, handovers: 0 },
   },
   {
     id: "p2", name: "Acme Design System", client: "Acme Corp", status: "Review",
     deadline: "Oct 28, 2026", owner: "Sarah K.", team: ["SK", "EM"], tags: ["Systems", "Figma"],
-    progress: 90, linked: { files: 4, tasks: 12, messages: 45, invoices: 1, handovers: 1 },
+    progress: 90, linked: { files: 4, tasks: 12, messages: 45, handovers: 1 },
   },
   {
     id: "p3", name: "Global Marketing Campaign", client: "GlobalNet", status: "Planning",
     deadline: "Jan 10, 2027", owner: "John D.", team: ["JD"], tags: ["Marketing", "Copy", "Social"],
-    progress: 15, linked: { files: 2, tasks: 8, messages: 14, invoices: 0, handovers: 0 },
+    progress: 15, linked: { files: 2, tasks: 8, messages: 14, handovers: 0 },
   },
 ];
 
@@ -824,7 +837,7 @@ function rowToProject(r: ProjectRow): ProjectFull {
     team: parseJson<string[]>(r.team, []),
     tags: parseJson<string[]>(r.tags, []),
     progress: r.progress ?? 0,
-    linked: parseJson<ProjectLinked>(r.linked, { files: 0, tasks: 0, messages: 0, invoices: 0, handovers: 0 }),
+    linked: parseJson<ProjectLinked>(r.linked, { files: 0, tasks: 0, messages: 0, handovers: 0 }),
   };
 }
 
@@ -961,6 +974,7 @@ interface SettingsRow {
   logo_url: string | null;
   brand_accent: string | null;
   brand_theme: string | null;
+  brand_template: string | null;
 }
 
 function rowToSettings(r: Partial<SettingsRow>): StudioSettings {
@@ -970,6 +984,9 @@ function rowToSettings(r: Partial<SettingsRow>): StudioSettings {
     logoUrl: r.logo_url ?? undefined,
     brandAccent: r.brand_accent ?? "#2c2c2e",
     brandTheme: r.brand_theme === "dark" ? "dark" : "light",
+    brandTemplate: HANDOVER_TEMPLATES.includes((r.brand_template ?? "") as HandoverTemplate)
+      ? (r.brand_template as HandoverTemplate)
+      : "editorial",
   };
 }
 
@@ -1027,7 +1044,7 @@ function writeProject(p: ProjectFull, ord: number, workspaceId: string) {
     team: JSON.stringify(p.team ?? []),
     tags: JSON.stringify(p.tags ?? []),
     progress: p.progress ?? 0,
-    linked: JSON.stringify(p.linked ?? { files: 0, tasks: 0, messages: 0, invoices: 0, handovers: 0 }),
+    linked: JSON.stringify(p.linked ?? { files: 0, tasks: 0, messages: 0, handovers: 0 }),
     ord,
   });
 }
@@ -1111,11 +1128,11 @@ const setReviewStatusStmt = db.prepare(`
 `);
 
 const upsertSettingsStmt = db.prepare(`
-  INSERT INTO settings (workspace_id, studio_name, default_owner, logo_url, brand_accent, brand_theme)
-  VALUES (@workspace_id, @studio_name, @default_owner, @logo_url, @brand_accent, @brand_theme)
+  INSERT INTO settings (workspace_id, studio_name, default_owner, logo_url, brand_accent, brand_theme, brand_template)
+  VALUES (@workspace_id, @studio_name, @default_owner, @logo_url, @brand_accent, @brand_theme, @brand_template)
   ON CONFLICT(workspace_id) DO UPDATE SET
     studio_name = @studio_name, default_owner = @default_owner, logo_url = @logo_url,
-    brand_accent = @brand_accent, brand_theme = @brand_theme
+    brand_accent = @brand_accent, brand_theme = @brand_theme, brand_template = @brand_template
 `);
 
 function writeSettings(s: StudioSettings, workspaceId: string) {
@@ -1126,6 +1143,7 @@ function writeSettings(s: StudioSettings, workspaceId: string) {
     logo_url: s.logoUrl ?? null,
     brand_accent: s.brandAccent ?? null,
     brand_theme: s.brandTheme ?? null,
+    brand_template: s.brandTemplate ?? null,
   });
 }
 
@@ -1262,7 +1280,7 @@ function seedCommentsIfEmpty() {
 function seedSettingsIfEmpty(workspaceId: string) {
   const n = (db.prepare(`SELECT COUNT(*) AS n FROM settings WHERE workspace_id = ?`).get(workspaceId) as { n: number }).n;
   if (n === 0) {
-    writeSettings({ studioName: "Desboard Studio", defaultOwner: "You", brandAccent: "#D85E25", brandTheme: "dark" }, workspaceId);
+    writeSettings({ studioName: "Desboard Studio", defaultOwner: "You", brandAccent: "#D85E25", brandTheme: "dark", brandTemplate: "editorial" }, workspaceId);
     console.log("[db] Seeded studio settings.");
   }
 }
@@ -1343,6 +1361,11 @@ export function createWorkspace(name: string): WorkspaceRecord {
   // predate this feature, not ones created afterward).
   const trialEndsAt = new Date(Date.now() + TRIAL_MS).toISOString();
   db.prepare(`INSERT INTO workspaces (id, name, created, trial_ends_at) VALUES (?, ?, ?, ?)`).run(id, name, created, trialEndsAt);
+  // Without this, Settings -> Studio profile's "Studio name" field starts
+  // blank even though the workspace itself is already named — the studio
+  // name typed at signup would otherwise never reach handover branding
+  // until someone happens to retype it in Settings.
+  writeSettings({ studioName: name, defaultOwner: "", brandAccent: "#2c2c2e", brandTheme: "light", brandTemplate: "editorial" }, id);
   return { id, name, created };
 }
 

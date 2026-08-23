@@ -125,6 +125,19 @@ function requireSession(req: Request, res: Response, h: Handover): boolean {
 }
 
 /**
+ * Blocks the client-facing write actions (comment, approve, request changes)
+ * on a Draft — the page itself still renders (the studio's own preview reuses
+ * this URL), but nothing should be able to act on a package that hasn't
+ * actually been sent, whether that's a client who got the link early or the
+ * studio clicking around its own preview.
+ */
+function requireSent(req: Request, res: Response, h: Handover): boolean {
+  if (h.status !== "Draft") return true;
+  res.status(403).json({ error: "This delivery hasn't been sent yet." });
+  return false;
+}
+
+/**
  * The set of a handover's files the portal is actually allowed to show — every
  * download, preview, approve/request-changes, and comment target ultimately
  * resolves through here (not the raw h.fileIds list), so a file the studio
@@ -192,7 +205,12 @@ export function createPortalRouter(): Router {
     // Invite links and public links authenticate by possession of the token.
     if (h.accessMode !== "password") setSessionCookie(res, h.id);
 
-    audit(req, h, "view");
+    // A Draft hasn't been sent — the studio's own "preview" reuses this exact
+    // URL (see HandoverPanel's openLandingPage), so the page still needs to
+    // render for that. What it must not do is look like real client activity:
+    // logging a "view" here would surface as "<client> viewed the delivery"
+    // on the studio's Home feed for a package nobody actually sent yet.
+    if (h.status !== "Draft") audit(req, h, "view");
     const comments = getComments(h.id).filter(visibleToClient);
     res.type("html").send(
       renderHandoverPage({
@@ -237,7 +255,7 @@ export function createPortalRouter(): Router {
 
   router.post("/api/portal/:token/comments", commentLimiter, (req, res) => {
     const h = resolve(req, res, false);
-    if (!h || !requireSession(req, res, h)) return;
+    if (!h || !requireSession(req, res, h) || !requireSent(req, res, h)) return;
     const { author, body, fileId, x, y, timecode, version } = req.body as {
       author?: string;
       body?: string;
@@ -329,7 +347,7 @@ export function createPortalRouter(): Router {
 
   router.post("/api/portal/:token/file/:fileId/approve", approveLimiter, (req, res) => {
     const h = resolve(req, res, false);
-    if (!h || !requireSession(req, res, h)) return;
+    if (!h || !requireSession(req, res, h) || !requireSent(req, res, h)) return;
     const fileId = req.params.fileId;
     if (!h.fileIds.includes(fileId)) return res.status(404).json({ error: "File not found in this delivery" });
     const file = filesOf(h).find((f) => f.id === fileId);
@@ -345,7 +363,7 @@ export function createPortalRouter(): Router {
   // "the client rejected this" without reading prose.
   router.post("/api/portal/:token/file/:fileId/request-changes", approveLimiter, (req, res) => {
     const h = resolve(req, res, false);
-    if (!h || !requireSession(req, res, h)) return;
+    if (!h || !requireSession(req, res, h) || !requireSent(req, res, h)) return;
     const fileId = req.params.fileId;
     if (!h.fileIds.includes(fileId)) return res.status(404).json({ error: "File not found in this delivery" });
     const file = filesOf(h).find((f) => f.id === fileId);

@@ -209,7 +209,7 @@ export function createBillingRouter(): Router {
   });
 
   router.post("/api/billing/checkout", requireOwner, async (req: AuthedRequest, res) => {
-    if (!stripe) return res.status(503).json({ error: "Billing is not configured yet — contact your workspace admin." });
+    if (!stripe) return res.status(503).json({ error: "Billing isn't available right now — please try again later." });
 
     const { tier, interval, seats } = req.body as { tier?: string; interval?: string; seats?: number };
     if (tier !== "freelance" && tier !== "studio") return res.status(400).json({ error: "Unknown plan" });
@@ -217,7 +217,7 @@ export function createBillingRouter(): Router {
 
     const quantity = tier === "studio" ? Math.max(3, Math.floor(Number(seats) || 3)) : 1;
     const priceId = priceIdFor(tier, interval);
-    if (!priceId) return res.status(503).json({ error: "That plan isn't set up yet — contact your workspace admin." });
+    if (!priceId) return res.status(503).json({ error: "That plan isn't available to check out into yet — please try again later." });
 
     const workspaceId = req.auth!.workspaceId;
     // Persisted before the session is created, and reused on every later
@@ -251,7 +251,7 @@ export function createBillingRouter(): Router {
   });
 
   router.post("/api/billing/portal", requireOwner, async (req: AuthedRequest, res) => {
-    if (!stripe) return res.status(503).json({ error: "Billing is not configured yet — contact your workspace admin." });
+    if (!stripe) return res.status(503).json({ error: "Billing isn't available right now — please try again later." });
     const workspaceId = req.auth!.workspaceId;
     const customerId = getWorkspaceStripeCustomerId(workspaceId);
     if (!customerId) return res.status(400).json({ error: "Choose a plan first — there's no billing account to manage yet." });

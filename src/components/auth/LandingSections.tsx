@@ -168,7 +168,7 @@ export function EditorialHero() {
         className="lg:col-span-7"
       >
         <h1 className="text-[clamp(40px,6.4vw,84px)] font-medium leading-[0.98] tracking-[-0.035em] text-[var(--ed-ink)] text-balance">
-          Make the handoff feel finished.
+          From kickoff to handoff.
         </h1>
         <p className="text-[18px] sm:text-[20px] leading-[1.5] tracking-[-0.005em] text-[var(--ed-ink-secondary)] mt-7 max-w-[46ch]">
           Projects, files, and approvals in one place — handed off through a portal your clients actually enjoy
@@ -235,6 +235,286 @@ export function IntegrationMarquee() {
           ))}
         </div>
       </div>
+    </div>
+  );
+}
+
+/* ==========================================================================
+   Key features — a six-up overview grid. Retokenized from a design-review
+   mockup onto this page's own editorial system (Instrument Sans via
+   --font-editorial, --ed-* colors) rather than the mockup's own Inter/
+   Newsreader — everything here inherits type from the .editorial wrapper,
+   same as every other section in this file. The two spots that referenced
+   stand-in photography in the mockup are left as plain neutral placeholders
+   here rather than faked screenshots, matching this page's no-fabrication
+   rule; every other visual is real CSS/markup, not an image.
+   ========================================================================== */
+
+function DriveMark() {
+  return (
+    <svg width="24" height="21" viewBox="0 0 87.3 78" role="img" aria-label="Google Drive">
+      <path d="m6.6 66.85 3.85 6.65c.8 1.4 1.95 2.5 3.3 3.3l13.75-23.8H0c0 1.55.4 3.1 1.2 4.5z" fill="#0066da" />
+      <path d="M43.65 25 29.9 1.2c-1.35.8-2.5 1.9-3.3 3.3l-25.4 44A9.06 9.06 0 0 0 0 53h27.5z" fill="#00ac47" />
+      <path
+        d="M73.55 76.8c1.35-.8 2.5-1.9 3.3-3.3l1.6-2.75L86.1 57.3c.8-1.4 1.2-2.95 1.2-4.5H59.8l5.85 11.5z"
+        fill="#ea4335"
+      />
+      <path d="M43.65 25 57.4 1.2C56.05.4 54.5 0 52.9 0H34.4c-1.6 0-3.15.45-4.5 1.2z" fill="#00832d" />
+      <path d="M59.8 53.8H27.5L13.75 77.6c1.35.8 2.9 1.2 4.5 1.2h50.8c1.6 0 3.15-.45 4.5-1.2z" fill="#2684fc" />
+      <path
+        d="M73.4 26.5 60.75 4.5c-.8-1.4-1.95-2.5-3.3-3.3L43.65 25l16.15 28.8h27.45c0-1.55-.4-3.1-1.2-4.5z"
+        fill="#ffba00"
+      />
+    </svg>
+  );
+}
+
+function DropboxMark() {
+  return (
+    <svg width="24" height="22" viewBox="0 0 43 40" role="img" aria-label="Dropbox">
+      <path
+        fill="#0061ff"
+        d="M10.75 0 0 6.85l10.75 6.85L21.5 6.85zm21.5 0L21.5 6.85l10.75 6.85L43 6.85zM0 20.55l10.75 6.85L21.5 20.55 10.75 13.7zm32.25-6.85L21.5 20.55l10.75 6.85L43 20.55zM10.75 29.7l10.75 6.85L32.25 29.7 21.5 22.85z"
+      />
+    </svg>
+  );
+}
+
+function OneDriveMark() {
+  return (
+    <svg width="28" height="18" viewBox="0 0 48 30" role="img" aria-label="OneDrive">
+      <path fill="#0364b8" d="m28.9 18.4 10.6-10.1a15.7 15.7 0 0 0-26.7-2.1 11 11 0 0 1 8.7 3.4z" />
+      <path fill="#0078d4" d="M20.5 9.8a10.6 10.6 0 0 0-5.6-1.6h-.4A10.7 10.7 0 0 0 5 24.4l14.9-6.3 6.6-2.8 3-1.2z" />
+      <path
+        fill="#1490df"
+        d="M13.2 6.2h.5c.6 0 1.2.1 1.8.2l4.9 2.5a10.7 10.7 0 0 1 8.5 9.5l9.4-2 .8-.2a9.7 9.7 0 0 0-.8-7.7z"
+      />
+      <path
+        fill="#28a8ea"
+        d="M28.9 18.4h-.5c-.7 0-1.4.1-2.1.3l-4.5-4.3-16.6 6a10.7 10.7 0 0 0 9.6 9h23a8 8 0 0 0 0-15.9z"
+      />
+    </svg>
+  );
+}
+
+function FeatureCell({ children }: { children: ReactNode }) {
+  return <div className="border-r border-b border-[var(--ed-hairline)] p-7 sm:p-8 flex flex-col gap-7">{children}</div>;
+}
+
+function FeatureCopy({ title, body }: { title: string; body: string }) {
+  return (
+    <div className="flex flex-col gap-2.5">
+      <h3 className="text-[17px] font-semibold tracking-[-0.015em] text-[var(--ed-ink)]">{title}</h3>
+      <p className="text-[13.5px] leading-[1.6] text-[var(--ed-ink-secondary)]">{body}</p>
+    </div>
+  );
+}
+
+export function KeyFeatures() {
+  return (
+    <div className="max-w-[1440px] mx-auto px-6 sm:px-10 py-28 sm:py-40">
+      <Reveal className="flex flex-col gap-10 mb-14 sm:mb-16">
+        <span className="text-[13px] font-medium text-[var(--ed-ink-tertiary)] tracking-[0.02em] uppercase">
+          Key features
+        </span>
+        <div className="grid grid-cols-1 lg:grid-cols-[1.1fr_0.9fr] gap-x-16 gap-y-6 items-start">
+          <h2 className="text-[clamp(32px,4.6vw,56px)] font-medium leading-[1.05] tracking-[-0.03em] text-[var(--ed-ink)] text-balance">
+            Everything you&#8217;ve ever made, finally findable.
+          </h2>
+          <p className="text-[17px] leading-[1.6] text-[var(--ed-ink-secondary)] mt-1">
+            Desboard sits on top of the storage your studio already pays for &mdash; and turns it into a searchable
+            archive, a review room and a client-facing delivery surface.
+          </p>
+        </div>
+      </Reveal>
+
+      <Reveal delay={0.05}>
+        <div className="border-t border-l border-[var(--ed-hairline)] grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3">
+          <FeatureCell>
+            <div className="h-[236px] flex flex-col items-center justify-center gap-0">
+              <div className="flex items-center gap-5">
+                {[
+                  { label: "Drive", Mark: DriveMark },
+                  { label: "Dropbox", Mark: DropboxMark },
+                  { label: "OneDrive", Mark: OneDriveMark },
+                ].map(({ label, Mark }) => (
+                  <div key={label} className="flex flex-col items-center gap-2">
+                    <div className="w-14 h-14 rounded-[14px] bg-[var(--ed-bg)] border border-[var(--ed-hairline)] shadow-[0_1px_2px_rgba(0,0,0,0.04)] flex items-center justify-center">
+                      <Mark />
+                    </div>
+                    <span className="text-[11.5px] text-[var(--ed-ink-tertiary)]">{label}</span>
+                  </div>
+                ))}
+              </div>
+              <div className="w-px h-[26px] border-l border-dashed border-[var(--ed-hairline)]" />
+              <div className="w-[180px] border-t border-dashed border-[var(--ed-hairline)]" />
+              <div className="w-px h-[26px] border-l border-dashed border-[var(--ed-hairline)]" />
+              <div className="bg-[var(--ed-bg)] border border-[var(--ed-hairline)] rounded-xl px-4 py-3 flex flex-col items-center gap-1">
+                <span className="text-[11.5px] text-[var(--ed-ink-tertiary)]">Setup time</span>
+                <span className="text-[13.5px] font-medium text-[var(--ed-ink)]">3 clouds linked &middot; 90 seconds</span>
+              </div>
+            </div>
+            <FeatureCopy
+              title="Link what you already use"
+              body="Google Drive, Dropbox and OneDrive in about ninety seconds. Files stay in your own accounts — Desboard stores references, not duplicates."
+            />
+          </FeatureCell>
+
+          <FeatureCell>
+            <div className="h-[236px] flex flex-col justify-center gap-3.5">
+              <div className="bg-[var(--ed-bg)] border border-[var(--ed-hairline)] rounded-xl px-4 py-3 text-[13.5px] text-[var(--ed-ink)] shadow-[0_1px_2px_rgba(0,0,0,0.04)]">
+                the moody kitchen shots from the Fazer job
+              </div>
+              <div className="flex justify-center">
+                <div className="w-px h-[18px] border-l border-dashed border-[var(--ed-hairline)]" />
+              </div>
+              <div className="grid grid-cols-2 gap-2.5">
+                <div className="aspect-[4/3] rounded-[10px] bg-[var(--ed-bg-alt)]" />
+                <div className="aspect-[4/3] rounded-[10px] bg-[var(--ed-bg-alt)]" />
+              </div>
+              <div className="flex gap-1.5 flex-wrap">
+                {["AI tags", "OCR", "Duplicates", "Visual match"].map((t) => (
+                  <span
+                    key={t}
+                    className="bg-[var(--ed-bg-alt)] rounded-full px-2.5 py-1 text-[11.5px] text-[var(--ed-ink-secondary)]"
+                  >
+                    {t}
+                  </span>
+                ))}
+              </div>
+            </div>
+            <FeatureCopy
+              title="Find anything you&#8217;ve ever made"
+              body="Search every connected cloud from one place — including the years of work that never passed through a review tool. Ask for it the way you remember it."
+            />
+          </FeatureCell>
+
+          <FeatureCell>
+            <div className="h-[236px] flex flex-col justify-center">
+              <div className="bg-[var(--ed-bg)] border border-[var(--ed-hairline)] rounded-xl px-4 py-3 flex items-center justify-between gap-3">
+                <span className="text-[13.5px] text-[var(--ed-ink-tertiary)]">Source &middot; v1</span>
+                <span className="w-[7px] h-[7px] rounded-full bg-[var(--ed-ink-tertiary)]" />
+              </div>
+              <div className="h-4 ml-6 border-l border-dashed border-[var(--ed-hairline)]" />
+              <div className="bg-[var(--ed-bg)] border border-[var(--ed-hairline)] rounded-xl px-4 py-3 flex items-center justify-between gap-3">
+                <span className="text-[13.5px] text-[var(--ed-ink-tertiary)]">Revision &middot; v2</span>
+                <span className="w-[7px] h-[7px] rounded-full bg-[var(--ed-ink-secondary)]" />
+              </div>
+              <div className="h-4 ml-6 border-l border-dashed border-[var(--ed-hairline)]" />
+              <div className="bg-[var(--ed-bg)] border border-[var(--ed-hairline)] rounded-xl px-4 py-3 flex items-center justify-between gap-3 shadow-[0_1px_2px_rgba(0,0,0,0.04)]">
+                <span className="text-[13.5px] font-medium text-[var(--ed-ink)]">Export the client received</span>
+                <span className="bg-[var(--ed-ink)] text-white rounded-full px-2.5 py-1 text-[11px] font-medium">
+                  Final
+                </span>
+              </div>
+              <div className="mt-3.5 text-[12px] text-[var(--ed-ink-tertiary)]">Used in 4 places &middot; 0 missing files</div>
+            </div>
+            <FeatureCopy
+              title="Know what&#8217;s approved"
+              body="Version history that traces a source file to the export the client actually received. See where an asset is used before you change it — health checks catch the rest."
+            />
+          </FeatureCell>
+
+          <FeatureCell>
+            <div className="h-[236px] flex flex-col justify-center gap-3.5">
+              <div className="flex items-center gap-1.5">
+                <span className="bg-[var(--ed-bg-alt)] rounded-full px-2.5 py-1 text-[11.5px] text-[var(--ed-ink-tertiary)]">
+                  Draft
+                </span>
+                <span className="text-[var(--ed-ink-tertiary)] text-[11px]">&rarr;</span>
+                <span className="bg-[var(--ed-bg-alt)] rounded-full px-2.5 py-1 text-[11.5px] text-[var(--ed-ink-tertiary)]">
+                  Review
+                </span>
+                <span className="text-[var(--ed-ink-tertiary)] text-[11px]">&rarr;</span>
+                <span className="bg-[var(--ed-ink)] text-white rounded-full px-2.5 py-1 text-[11.5px] font-medium">
+                  Approved
+                </span>
+              </div>
+              <div className="rounded-xl h-[104px] bg-[var(--ed-bg-alt)]" />
+              <div className="bg-[var(--ed-bg)] border border-[var(--ed-hairline)] rounded-xl px-4 py-3 flex gap-2.5 items-start">
+                <span className="shrink-0 w-5 h-5 rounded-full bg-[var(--ed-ink)] text-white text-[11px] font-medium flex items-center justify-center">
+                  1
+                </span>
+                <div className="flex flex-col gap-1">
+                  <span className="text-[13.5px] text-[var(--ed-ink)]">Crop tighter on the left edge.</span>
+                  <span className="text-[11.5px] text-[var(--ed-ink-tertiary)]">Aalto Foods &middot; v2 &middot; 2h ago</span>
+                </div>
+              </div>
+            </div>
+            <FeatureCopy
+              title="Review in one place"
+              body="Comment on a region of an image, a page of a PDF or a timestamp in a video. Every approval recorded with who, when and which version — permanently."
+            />
+          </FeatureCell>
+
+          <FeatureCell>
+            <div className="h-[236px] flex flex-col justify-center gap-3">
+              <div className="bg-[var(--ed-ink)] rounded-[14px] p-4 flex flex-col gap-3">
+                <div className="flex items-center justify-between">
+                  <span className="text-[10px] tracking-[0.14em] uppercase text-white/55">Handover</span>
+                  <span style={{ fontFamily: "var(--font-wordmark)" }} className="text-[13px] text-white">
+                    desboard
+                  </span>
+                </div>
+                <div className="text-[15px] font-medium text-white">Packaging &mdash; final dielines</div>
+                <div className="flex gap-2">
+                  <span className="border border-white/20 rounded-full px-2.5 py-1 text-[11px] text-white/70">
+                    studio.yourdomain.com
+                  </span>
+                  <span className="border border-white/20 rounded-full px-2.5 py-1 text-[11px] text-white/70">
+                    12 files
+                  </span>
+                </div>
+              </div>
+              <div className="bg-[var(--ed-bg)] border border-[var(--ed-hairline)] rounded-xl overflow-hidden">
+                <div className="px-3.5 py-2.5 text-[12.5px] text-[var(--ed-ink-tertiary)] border-b border-[var(--ed-hairline)] flex justify-between">
+                  <span>Opened by client</span>
+                  <span>2h ago</span>
+                </div>
+                <div className="px-3.5 py-2.5 text-[12.5px] text-[var(--ed-ink-tertiary)] flex justify-between">
+                  <span>Downloaded 4 files</span>
+                  <span>1h ago</span>
+                </div>
+              </div>
+            </div>
+            <FeatureCopy
+              title="Deliver like a studio"
+              body="Send a branded client portal instead of a file-transfer link. Your logo, your domain. See when the client opened it, what they downloaded and what they approved."
+            />
+          </FeatureCell>
+
+          <FeatureCell>
+            <div className="h-[236px] flex flex-col justify-center gap-3">
+              <div className="self-end bg-[var(--ed-ink)] text-white rounded-[14px] px-3.5 py-2.5 text-[13px] max-w-[85%]">
+                What&#8217;s still unapproved before Friday?
+              </div>
+              <div className="bg-[var(--ed-bg)] border border-[var(--ed-hairline)] rounded-xl px-4 py-3.5 flex flex-col gap-2.5">
+                <div className="text-[13.5px] leading-[1.55] text-[var(--ed-ink)]">
+                  Three files in Aalto Rebrand: two key visuals and the dieline v2. Nothing else is blocking delivery.
+                </div>
+                <div className="flex gap-1.5 flex-wrap">
+                  <span className="bg-[var(--ed-bg-alt)] rounded-md px-2 py-1 text-[11px] text-[var(--ed-ink-secondary)]">
+                    key-visual-a.tif
+                  </span>
+                  <span className="bg-[var(--ed-bg-alt)] rounded-md px-2 py-1 text-[11px] text-[var(--ed-ink-secondary)]">
+                    dieline-v2.pdf
+                  </span>
+                </div>
+              </div>
+              <div className="text-[12px] text-[var(--ed-ink-tertiary)]">Every answer comes with its sources.</div>
+            </div>
+            <FeatureCopy
+              title="Ask your archive"
+              body="The project assistant answers questions grounded in your own files: what changed this week, what's still unapproved, what's missing before delivery."
+            />
+          </FeatureCell>
+        </div>
+      </Reveal>
+
+      <p className="text-[15px] leading-[1.6] text-[var(--ed-ink-tertiary)] max-w-[64ch] mt-10">
+        Built for design studios, brand agencies, photographers and in-house creative teams who already pay for
+        storage and just need to make sense of it.
+      </p>
     </div>
   );
 }
@@ -362,7 +642,7 @@ function ProductBlock({ data, index }: { data: ProductBlockData; index: number }
       <p className="text-[22px] sm:text-[26px] leading-[1.3] tracking-[-0.015em] text-[var(--ed-ink)] mt-4 mb-6 max-w-[34ch]">
         {data.heading}
       </p>
-      <ArrowLink href="#platform">{data.link}</ArrowLink>
+      <ArrowLink href="/signin?mode=signup">{data.link}</ArrowLink>
 
       <div className="grid grid-cols-2 gap-x-6 gap-y-6 mt-12">
         {data.capabilities.map((c) => (
