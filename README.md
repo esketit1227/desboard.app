@@ -1,11 +1,21 @@
-# Desboard — AI-Augmented Client-Delivery Workspace
+# Desboard — Client-Delivery Workspace
 
 Desboard is a multi-tenant SaaS platform for design studios: a project & file
 workspace for the team, paired with a token-only client portal for review,
-approval, and delivery — with **Anthropic Claude** woven in for search,
-copiloting, and upload triage. It's a full product now, not a demo: real
-signup/SSO auth, Stripe billing with plan-gated features, per-workspace data
-isolation, and a marketing site, all running on one small Express server.
+approval, and delivery. It's a full product now, not a demo: real signup/SSO
+auth, Stripe billing with plan-gated features, per-workspace data isolation,
+and a marketing site, all running on one small Express server.
+
+**A note on AI:** the codebase still has a full Anthropic Claude integration
+underneath (`server.ts`'s `/api/search`, `/api/analyze`, `/api/chat`,
+`/api/assistant` routes) — it's just not currently surfaced anywhere in the
+product UI, by deliberate choice, not by removing the underlying plumbing.
+Search is currently a plain server-side keyword match over name/tags/status
+(no AI ranking); there's no upload auto-tagging, no Project/File Copilot, and
+no home-screen Assistant. Every one of those routes already fails gracefully
+with no `ANTHROPIC_API_KEY` set, so re-enabling AI later is a UI-only change,
+not a re-architecture — see the git history around the "AI features removal"
+pass for exactly what was hidden and where.
 
 This document is the deep dive into the app's architecture, features, and how
 to run it.
@@ -99,7 +109,6 @@ every relevant write, not just in the UI:
 | Storage | 5GB | 100GB | 1TB (+ $15/100GB add-on) | Unlimited |
 | Active handovers | 2 | 5 | Unlimited | Unlimited |
 | Folder nesting / bulk actions / multi-upload | ✓ | — | ✓ | ✓ |
-| AI features | ✓ | — | ✓ | ✓ |
 
 `computeEffectiveTier()` in `billingCore.ts` is the single source of truth
 every gating check calls — it resolves trial expiry live against the current
@@ -112,32 +121,29 @@ changes land via a signature-verified webhook
 
 ---
 
-## 4. Core Intelligent Features (Anthropic Claude)
+## 4. AI Integration (currently dormant, not a product feature right now)
 
-The backend uses the official **`@anthropic-ai/sdk`**; `ANTHROPIC_API_KEY`
-never reaches the browser. Every AI route checks a nullable client and
-returns a friendly `503` if no key is configured — the frontend reads that
-state from `GET /api/ai/status` and degrades its own UI honestly (e.g.
-semantic search visibly falls back to keyword matching) rather than pretending
-AI is available.
+The backend has the official **`@anthropic-ai/sdk`** wired up, and every
+route below checks a nullable client and returns a friendly `503` if no key
+is configured — but as of the current build, none of it is surfaced in the
+product UI. That's a deliberate scope decision for this launch, not a
+technical limitation: the routes, prompts, and graceful-degradation handling
+all still exist and work, they're just not called from anywhere a user can
+reach.
 
-- **`claude-sonnet-4-6`** — File Copilot, Project Copilot, upload analysis,
-  and the streaming home-screen Assistant.
-- **`claude-haiku-4-5`** — fast semantic Vault search.
+| Dormant feature | Route | Model | UI it used to power |
+|---|---|---|---|
+| Semantic Vault search | `POST /api/search` | Haiku | File Vault search bar (now plain keyword match) |
+| Project Copilot | `POST /api/chat` | Sonnet | A "Copilot" button in Projects (removed) |
+| File Copilot | `POST /api/chat` | Sonnet | An "AI" tab in the file inspector (removed) |
+| Upload tagging & summary | `POST /api/analyze` | Sonnet | Suggested-tags step on single-file upload (removed) |
+| Home Assistant (streaming, SSE) | `POST /api/assistant` | Sonnet | A featured card on Home (removed — its component files under `src/components/assistant/` were deleted; the route and `src/lib/assistant.ts` were kept) |
 
-| Feature | Route | Model |
-|---|---|---|
-| Semantic Vault search | `POST /api/search` | Haiku |
-| Project Copilot | `POST /api/chat` | Sonnet |
-| File Copilot | `POST /api/chat` | Sonnet |
-| Upload tagging & summary | `POST /api/analyze` | Sonnet |
-| Home Assistant (streaming, SSE) | `POST /api/assistant` | Sonnet |
-
-The home-screen **Assistant** is read-only by design: it answers over a
-compact index of the workspace's real data and cites sources structurally
-(real file ids resolved server-side, never parsed back out of its prose) — it
-never performs writes, and is instructed to redirect write requests to the
-right screen instead.
+`ANTHROPIC_API_KEY` never reaches the browser when this is re-enabled. To
+bring any of this back: re-add the UI call site (each removal above is a
+small, self-contained diff — search git history/blame around "AI features
+removal" on the relevant component), point it at the existing route, and set
+`ANTHROPIC_API_KEY`. No server-side changes should be needed.
 
 ---
 
@@ -189,7 +195,7 @@ The part clients actually touch, and the product's core differentiator:
 - **Cloud import** — connect Google Drive, Dropbox, or OneDrive
   (`server/oauth.ts`, Settings → Connections) and browse/import files
   directly, for studios whose source-of-truth lives elsewhere.
-- **AI-assisted upload tagging & semantic search** (plan-gated; see §4).
+- **Search** — plain keyword match over name/tags/status/type (was AI-ranked; see §4).
 
 ---
 
@@ -200,8 +206,8 @@ independent apps:
 
 | App | What it's for |
 |---|---|
-| **Home** | Activity feed, insight rail, and the streaming AI Assistant |
-| **Projects** | Project list/detail, tasks, deadlines, Project Copilot |
+| **Home** | Activity feed and insight rail |
+| **Projects** | Project list/detail, tasks, deadlines |
 | **File Vault** | Everything in §6 |
 | **Client Portal** | Manage handovers — assemble, brand, send, track status/approvals |
 | **Calendar** | Team scheduling/events |
@@ -247,7 +253,8 @@ src/
   App.tsx                       Top-level path routing (/, /pricing, /join/:token, dashboard)
   lib/
     api.ts                      Frontend API client (all calls go to /api/*)
-    assistant.ts                Streaming (SSE) client for the home Assistant
+    assistant.ts                Metrics logging (logAssistantEvent) + dormant SSE client;
+                                 its UI (src/components/assistant/) was removed — see §4
     handoverPage.ts             Shared renderer for the branded portal page (preview + live route)
     filePreview.ts, utils.ts, oauthStates.ts, portalStates.ts
   pages/
@@ -255,7 +262,6 @@ src/
     PricingPage.tsx               Standalone /pricing page
   components/
     apps/                        One component per dock app (see §7)
-    assistant/                   Home Assistant UI (box, thread, suggestion chips)
     auth/                        AuthGate, BillingGate, JoinInvite, landing page chrome
     home/                        Activity list, insight rail, celebration banner
     PricingCards.tsx, MarketingPricingCards.tsx

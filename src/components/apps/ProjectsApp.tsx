@@ -2,9 +2,9 @@ import type React from "react";
 import { useState, useEffect, useRef } from "react";
 import {
   ArrowRight,
-  Sparkles,
   CheckCircle,
   Archive,
+  ArchiveRestore,
   Calendar,
   FileText,
   Target,
@@ -16,13 +16,13 @@ import {
   X,
 } from "lucide-react";
 import { motion, AnimatePresence } from "motion/react";
-import type { ProjectFull, ChatMessage, TeamMember } from "../../types";
+import type { ProjectFull, TeamMember } from "../../types";
 import { api } from "../../lib/api";
 import { HandoverPanel } from "./HandoverPanel";
 import { TasksPanel } from "./TasksPanel";
 import { ProjectFilesPanel } from "./ProjectFilesPanel";
 
-/** Projects window: list + detail view, create modal, and the Project Copilot. */
+/** Projects window: list + detail view, create modal. */
 export function ProjectsApp({
   showToast,
   onOpenProjectMessages,
@@ -46,11 +46,8 @@ export function ProjectsApp({
   const [projectsList, setProjectsList] = useState<ProjectFull[]>([]);
   const [selectedProject, setSelectedProject] = useState<ProjectFull | null>(null);
   const [searchQuery, setSearchQuery] = useState("");
+  const [listTab, setListTab] = useState<"active" | "archived">("active");
   const [isCreating, setIsCreating] = useState(false);
-  const [isAiModalOpen, setIsAiModalOpen] = useState(false);
-  const [aiChatInput, setAiChatInput] = useState("");
-  const [aiChatResponses, setAiChatResponses] = useState<ChatMessage[]>([]);
-  const [isAiLoading, setIsAiLoading] = useState(false);
   const [showHandovers, setShowHandovers] = useState(false);
   const [handoverCount, setHandoverCount] = useState<number | null>(null);
   const [showTasks, setShowTasks] = useState(false);
@@ -169,20 +166,6 @@ export function ProjectsApp({
     }
   };
 
-  const sendCopilotMessage = async (prompt: string, project: ProjectFull) => {
-    setAiChatInput("");
-    setAiChatResponses((prev) => [...prev, { role: "user", text: prompt }]);
-    setIsAiLoading(true);
-    try {
-      const text = await api.chat(prompt, project);
-      setAiChatResponses((prev) => [...prev, { role: "ai", text }]);
-    } catch {
-      setAiChatResponses((prev) => [...prev, { role: "ai", text: "Error connecting to Copilot." }]);
-    } finally {
-      setIsAiLoading(false);
-    }
-  };
-
   const toggleProjectStatus = (id: string, e?: React.MouseEvent) => {
     if (e) e.stopPropagation();
     const current = projectsList.find((p) => p.id === id);
@@ -199,19 +182,25 @@ export function ProjectsApp({
     });
   };
 
+  // Toggles between Archive and Unarchive depending on the project's current
+  // status. There's no stored "status before archiving" to restore, so
+  // Unarchive lands on Planning — the same default the status-cycle dot
+  // already wraps back to today.
   const archiveProject = (id: string) => {
     const current = projectsList.find((p) => p.id === id);
     if (!current) return;
-    const updated = { ...current, status: "Archived" as const };
+    const wasArchived = current.status === "Archived";
+    const nextStatus = wasArchived ? ("Planning" as const) : ("Archived" as const);
+    const updated = { ...current, status: nextStatus };
     skipInitialLoad.current = true;
     setProjectsList((prev) => prev.map((p) => (p.id === id ? updated : p)));
     if (selectedProject?.id === id) setSelectedProject(updated);
     api
-      .updateProject(id, { status: "Archived" })
-      .then(() => showToast("Project archived"))
+      .updateProject(id, { status: nextStatus })
+      .then(() => showToast(wasArchived ? "Project unarchived" : "Project archived"))
       .catch((err) => {
-        console.error("Failed to archive project", err);
-        showToast("Could not archive the project");
+        console.error("Failed to update project status", err);
+        showToast(wasArchived ? "Could not unarchive the project" : "Could not archive the project");
       });
   };
 
@@ -271,9 +260,11 @@ export function ProjectsApp({
 
   const filteredProjects = projectsList.filter(
     (p) =>
-      p.name.toLowerCase().includes(searchQuery.toLowerCase()) ||
-      p.client.toLowerCase().includes(searchQuery.toLowerCase())
+      (listTab === "archived" ? p.status === "Archived" : p.status !== "Archived") &&
+      (p.name.toLowerCase().includes(searchQuery.toLowerCase()) ||
+        p.client.toLowerCase().includes(searchQuery.toLowerCase()))
   );
+  const archivedCount = projectsList.filter((p) => p.status === "Archived").length;
 
   // --- Detail view ---
   if (selectedProject) {
@@ -294,12 +285,6 @@ export function ProjectsApp({
           </div>
           <div className="flex flex-wrap items-center gap-2 basis-full sm:basis-auto sm:ml-auto">
             <button
-              onClick={() => setIsAiModalOpen(true)}
-              className="flex items-center gap-2 px-4 py-2 bg-moss/10 hover:bg-moss/[0.16] rounded-full text-[13px] transition-colors font-medium text-moss"
-            >
-              <Sparkles className="w-4 h-4" /> Copilot
-            </button>
-            <button
               onClick={() => setEditDraft(selectedProject)}
               className="flex items-center gap-2 px-4 py-2 bg-panel hover:bg-chip rounded-full text-[13px] transition-colors font-medium text-ink"
             >
@@ -309,7 +294,15 @@ export function ProjectsApp({
               onClick={() => archiveProject(selectedProject.id)}
               className="flex items-center gap-2 px-4 py-2 bg-primary/10 hover:bg-primary/[0.16] rounded-full text-[13px] transition-colors font-medium text-primary"
             >
-              <Archive className="w-4 h-4" /> Archive
+              {selectedProject.status === "Archived" ? (
+                <>
+                  <ArchiveRestore className="w-4 h-4" /> Unarchive
+                </>
+              ) : (
+                <>
+                  <Archive className="w-4 h-4" /> Archive
+                </>
+              )}
             </button>
           </div>
         </div>
@@ -407,104 +400,6 @@ export function ProjectsApp({
         </div>
 
         <AnimatePresence>
-          {isAiModalOpen && (
-            <motion.div
-              initial={{ opacity: 0, y: 20 }}
-              animate={{ opacity: 1, y: 0 }}
-              exit={{ opacity: 0, y: 20 }}
-              className="absolute bottom-6 right-6 w-[360px] bg-surface border border-line shadow-xl rounded-2xl overflow-hidden z-[100] flex flex-col max-h-[500px]"
-            >
-              <div className="p-4 border-b border-line flex items-center justify-between bg-panel">
-                <div className="flex items-center gap-3">
-                  <div className="p-1.5 bg-moss/15 text-moss rounded-md">
-                    <Sparkles className="w-4 h-4" />
-                  </div>
-                  <h3 className="text-[14px] font-semibold text-ink">Project Copilot</h3>
-                </div>
-                <button onClick={() => setIsAiModalOpen(false)} className="text-muted hover:text-ink transition-colors">
-                  <X className="w-4 h-4" />
-                </button>
-              </div>
-              <div className="flex-1 overflow-y-auto p-4 flex flex-col gap-4 min-h-[250px]">
-                {aiChatResponses.length === 0 ? (
-                  <div className="text-center py-8">
-                    <p className="text-[13px] text-muted mb-2">
-                      I'm your AI assistant for <strong className="text-ink">{selectedProject.name}</strong>.
-                    </p>
-                    <div className="flex flex-col gap-2 mt-4">
-                      <button
-                        onClick={() =>
-                          sendCopilotMessage(
-                            "Draft an update email to the client highlighting recent progress.",
-                            selectedProject
-                          )
-                        }
-                        className="text-left p-3 text-[12.5px] bg-chip hover:bg-line rounded-lg transition-colors text-ink/80"
-                      >
-                        Draft a project update email
-                      </button>
-                      <button
-                        onClick={() =>
-                          sendCopilotMessage("Analyze the deadlines and predict potential risks.", selectedProject)
-                        }
-                        className="text-left p-3 text-[12.5px] bg-chip hover:bg-line rounded-lg transition-colors text-ink/80"
-                      >
-                        Analyze pacing & risks
-                      </button>
-                    </div>
-                  </div>
-                ) : (
-                  aiChatResponses.map((msg, idx) => (
-                    <div key={idx} className={`flex flex-col ${msg.role === "user" ? "items-end" : "items-start"}`}>
-                      <div
-                        className={`px-4 py-3 rounded-2xl text-[13px] max-w-[90%] whitespace-pre-wrap leading-relaxed ${
-                          msg.role === "user"
-                            ? "bg-moss text-white font-medium rounded-br-sm"
-                            : "bg-chip text-ink rounded-bl-sm"
-                        }`}
-                      >
-                        {msg.text}
-                      </div>
-                    </div>
-                  ))
-                )}
-                {isAiLoading && (
-                  <div className="flex items-start">
-                    <div className="px-4 py-3 rounded-2xl text-[13px] bg-chip text-muted rounded-bl-sm">
-                      <Sparkles className="w-4 h-4 animate-pulse text-moss" />
-                    </div>
-                  </div>
-                )}
-              </div>
-              <div className="p-3 bg-panel border-t border-line">
-                <div className="relative">
-                  <input
-                    type="text"
-                    placeholder="Ask your assistant..."
-                    value={aiChatInput}
-                    onChange={(e) => setAiChatInput(e.target.value)}
-                    onKeyDown={(e) => {
-                      if (e.key === "Enter" && aiChatInput.trim() && !isAiLoading) {
-                        sendCopilotMessage(aiChatInput.trim(), selectedProject);
-                      }
-                    }}
-                    className="w-full bg-surface border border-line focus:border-moss/50 rounded-xl pl-4 pr-10 py-3 text-[13px] text-ink outline-none transition-colors"
-                  />
-                  <button
-                    onClick={() => {
-                      if (aiChatInput.trim() && !isAiLoading) sendCopilotMessage(aiChatInput.trim(), selectedProject);
-                    }}
-                    className="absolute right-3 top-1/2 -translate-y-1/2 p-1.5 bg-moss text-white rounded-lg hover:bg-moss/85 transition-colors"
-                  >
-                    <ArrowRight className="w-3 h-3" />
-                  </button>
-                </div>
-              </div>
-            </motion.div>
-          )}
-        </AnimatePresence>
-
-        <AnimatePresence>
           {editDraft && (
             <motion.div
               initial={{ opacity: 0 }}
@@ -559,11 +454,10 @@ export function ProjectsApp({
                     <div>
                       <label className="text-[13px] text-muted block mb-2">Deadline</label>
                       <input
-                        type="text"
+                        type="date"
                         value={editDraft.deadline}
                         onChange={(e) => setEditDraft({ ...editDraft, deadline: e.target.value })}
                         className="w-full bg-paper border border-line rounded-lg px-4 py-3 text-[13.5px] text-ink outline-none focus:border-primary/50 transition-colors"
-                        placeholder="e.g. Dec 15, 2026"
                       />
                     </div>
                   </div>
@@ -627,7 +521,7 @@ export function ProjectsApp({
   // --- List view ---
   return (
     <div className="flex flex-col h-full text-ink w-full relative">
-      <div className="flex flex-col md:flex-row justify-between items-start md:items-end mb-6 shrink-0 gap-4">
+      <div className="flex flex-col md:flex-row justify-between items-start md:items-end mb-4 shrink-0 gap-4">
         <p className="text-muted text-[14px]">Active deliverables &amp; engagements.</p>
         <div className="flex items-center gap-3 w-full md:w-auto">
           <div className="relative w-full md:w-64 focus-within:border-primary/50 rounded-full transition-colors bg-panel border border-transparent px-4 py-2.5 flex items-center gap-3">
@@ -648,6 +542,31 @@ export function ProjectsApp({
           </button>
         </div>
       </div>
+
+      <div className="flex items-center gap-1 mb-3 shrink-0">
+        <button
+          onClick={() => setListTab("active")}
+          className={`text-[12.5px] px-2.5 py-1 rounded-full transition-colors ${
+            listTab === "active" ? "bg-surface text-ink font-medium shadow-sm" : "text-muted hover:text-ink"
+          }`}
+        >
+          Active
+        </button>
+        <button
+          onClick={() => setListTab("archived")}
+          className={`text-[12.5px] px-2.5 py-1 rounded-full transition-colors ${
+            listTab === "archived" ? "bg-surface text-ink font-medium shadow-sm" : "text-muted hover:text-ink"
+          }`}
+        >
+          Archived{archivedCount > 0 ? ` (${archivedCount})` : ""}
+        </button>
+      </div>
+
+      {filteredProjects.length === 0 && listTab === "archived" && (
+        <div className="text-center py-16 border border-dashed border-line rounded-2xl mb-6">
+          <p className="text-[13px] text-ink/70">No archived projects.</p>
+        </div>
+      )}
 
       <div className="flex-1 overflow-y-auto pr-2 pb-6 grid grid-cols-1 lg:grid-cols-2 xl:grid-cols-3 gap-3 auto-rows-max">
         {filteredProjects.map((p) => (
@@ -759,11 +678,10 @@ export function ProjectsApp({
                   <div>
                     <label className="text-[13px] text-muted block mb-2">Deadline</label>
                     <input
-                      type="text"
+                      type="date"
                       value={newProject.deadline}
                       onChange={(e) => setNewProject({ ...newProject, deadline: e.target.value })}
                       className="w-full bg-paper border border-line rounded-lg px-4 py-3 text-[13.5px] text-ink outline-none focus:border-primary/50 transition-colors"
-                      placeholder="e.g. Dec 15"
                     />
                   </div>
                 </div>

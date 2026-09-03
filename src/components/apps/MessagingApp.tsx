@@ -5,6 +5,7 @@ import type { Conversation, ConversationMessage, ProjectFull, TeamMember } from 
 import { api } from "../../lib/api";
 import { timeAgo } from "../../lib/utils";
 import { MessagingHandoversSection } from "./MessagingHandoversSection";
+import { useAuth } from "../auth/AuthContext";
 
 type Section = "conversations" | "handovers";
 
@@ -26,6 +27,7 @@ export function MessagingApp({
   initialProjectFilter?: string | null;
   onOpenProject: (projectId: string) => void;
 }) {
+  const { user } = useAuth();
   const [section, setSection] = useState<Section>("conversations");
   const [conversations, setConversations] = useState<Conversation[]>([]);
   const [projects, setProjects] = useState<ProjectFull[]>([]);
@@ -40,7 +42,7 @@ export function MessagingApp({
   const [newProjectId, setNewProjectId] = useState("");
   const [creating, setCreating] = useState(false);
 
-  const [composerAuthor, setComposerAuthor] = useState("Elias M.");
+  const [composerAuthor, setComposerAuthor] = useState(user.name?.trim() || user.email.split("@")[0]);
   const [composerRole, setComposerRole] = useState<"me" | "them">("me");
   const [composerBody, setComposerBody] = useState("");
   const [sending, setSending] = useState(false);
@@ -223,10 +225,18 @@ export function MessagingApp({
                   const active = c.id === selectedId;
                   const linkedLabel = projectName(c.linkedProjectId) || memberName(c.linkedMemberId) || c.linkedClient;
                   return (
-                    <button
+                    <div
                       key={c.id}
+                      role="button"
+                      tabIndex={0}
                       onClick={() => setSelectedId(c.id)}
-                      className={`w-full text-left px-4 py-3 border-b border-line/60 transition-colors group relative ${
+                      onKeyDown={(e) => {
+                        if (e.key === "Enter" || e.key === " ") {
+                          e.preventDefault();
+                          setSelectedId(c.id);
+                        }
+                      }}
+                      className={`w-full text-left px-4 py-3 border-b border-line/60 transition-colors group relative cursor-pointer ${
                         active ? "bg-chip" : "hover:bg-chip/60"
                       }`}
                     >
@@ -247,7 +257,7 @@ export function MessagingApp({
                       >
                         <Trash2 className="w-3 h-3" />
                       </button>
-                    </button>
+                    </div>
                   );
                 })
               )}

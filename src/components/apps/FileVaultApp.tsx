@@ -37,9 +37,10 @@ import {
   FolderInput,
 } from "lucide-react";
 import { motion, AnimatePresence } from "motion/react";
-import type { VaultFile, ChatMessage, ProjectFull, Tag, FileStatus, PlanLimits } from "../../types";
+import type { VaultFile, ProjectFull, Tag, FileStatus, PlanLimits } from "../../types";
 import { api } from "../../lib/api";
 import { previewableKind, contentUrl } from "../../lib/filePreview";
+import { useAuth } from "../auth/AuthContext";
 
 /**
  * A drag-anywhere before/after reveal for two image versions of the same file —
@@ -142,10 +143,10 @@ function SliderCompare({
 }
 
 /**
- * File Vault window — grid/list browser, AI upload tagging, AI semantic search,
- * drag-and-drop into projects, a file inspector (details / history / links / AI),
- * version comparison, and file preview. Data is loaded from and persisted to the
- * SQLite-backed API so it survives a refresh.
+ * File Vault window — grid/list browser, search, drag-and-drop into projects,
+ * a file inspector (details / history / links), version comparison, and file
+ * preview. Data is loaded from and persisted to the SQLite-backed API so it
+ * survives a refresh.
  */
 export function FileVaultApp({
   showToast,
@@ -166,21 +167,19 @@ export function FileVaultApp({
   /** Deep-link to the Connections screen to actually connect/disconnect a provider. */
   onOpenConnections?: () => void;
 }) {
+  const { user } = useAuth();
+  const displayName = user.name?.trim() || user.email.split("@")[0];
   const [filesList, setFilesList] = useState<VaultFile[]>([]);
   const [viewMode, setViewMode] = useState<"grid" | "list">("grid");
   /** Below sm: the Vault nav is a toggled drawer, same pattern as the app shell's own sidebar. */
   const [mobileNavOpen, setMobileNavOpen] = useState(false);
   const [selectedFile, setSelectedFile] = useState<VaultFile | null>(null);
-  const [activeTab, setActiveTab] = useState<"details" | "versions" | "links" | "ai">("details");
+  const [activeTab, setActiveTab] = useState<"details" | "versions" | "links">("details");
   const [searchQuery, setSearchQuery] = useState("");
 
-  const [aiChatInput, setAiChatInput] = useState("");
-  const [aiChatResponses, setAiChatResponses] = useState<ChatMessage[]>([]);
-  const [isAiLoading, setIsAiLoading] = useState(false);
-  const [isSearchingAI, setIsSearchingAI] = useState(false);
   const [aiSearchResults, setAiSearchResults] = useState<string[] | null>(null);
-  // Bring-your-own-key: null while unknown, so the search icon doesn't
-  // flash a wrong state before the check comes back.
+  // null while unknown, so the message below the search box doesn't flash
+  // on then off before the check comes back.
   const [aiConfigured, setAiConfigured] = useState<boolean | null>(null);
   const [dragActive, setDragActive] = useState(false);
   const [isAddingTag, setIsAddingTag] = useState(false);
@@ -214,8 +213,8 @@ export function FileVaultApp({
   const [newAccessVal, setNewAccessVal] = useState("");
   const [editingLink, setEditingLink] = useState<"project" | "client" | null>(null);
 
-  // Upload & AI tagging state. `content` holds the base64 bytes until confirm,
-  // so the upload stores a real file (previews + downloads), not just metadata.
+  // Upload state. `content` holds the base64 bytes until confirm, so the
+  // upload stores a real file (previews + downloads), not just metadata.
   const [uploadingFile, setUploadingFile] = useState<{
     name: string;
     size: string;
@@ -223,10 +222,6 @@ export function FileVaultApp({
     content: string;
     mime: string;
   } | null>(null);
-  const [isAnalyzing, setIsAnalyzing] = useState(false);
-  const [suggestedTags, setSuggestedTags] = useState<string[]>([]);
-  const [uploadSummary, setUploadSummary] = useState<string | null>(null);
-  const [selectedSuggestions, setSelectedSuggestions] = useState<string[]>([]);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const searchInputRef = useRef<HTMLInputElement>(null);
 
@@ -294,22 +289,18 @@ export function FileVaultApp({
     }
   }, [initialFileId, filesList]);
 
-  // Debounced AI semantic search (falls back to keyword matching server-side).
+  // Debounced search — server-side keyword matching over name/tags/status/type.
   useEffect(() => {
     if (!searchQuery.trim()) {
       setAiSearchResults(null);
-      setIsSearchingAI(false);
       return;
     }
     const timeoutId = setTimeout(async () => {
-      setIsSearchingAI(true);
       try {
         const matchedIds = await api.search(searchQuery, filesList);
         if (Array.isArray(matchedIds)) setAiSearchResults(matchedIds);
       } catch (e) {
-        console.error("Failed semantic search", e);
-      } finally {
-        setIsSearchingAI(false);
+        console.error("Failed search", e);
       }
     }, 600);
     return () => clearTimeout(timeoutId);
@@ -608,11 +599,6 @@ export function FileVaultApp({
     const parts = file.name.split(".");
     const extension = parts.length > 1 ? parts.pop()?.toLowerCase() || "" : "file";
 
-    setIsAnalyzing(true);
-    setSuggestedTags([]);
-    setUploadSummary(null);
-    setSelectedSuggestions([]);
-
     const reader = new FileReader();
     const base64Promise = new Promise<string>((resolve, reject) => {
       reader.onload = () => {
@@ -627,7 +613,6 @@ export function FileVaultApp({
       fileContent = await base64Promise;
     } catch {
       showToast("Could not read that file");
-      setIsAnalyzing(false);
       return;
     }
     const mimeType = file.type || "application/octet-stream";
@@ -638,35 +623,13 @@ export function FileVaultApp({
       content: fileContent,
       mime: mimeType,
     });
-
-    try {
-      const data = await api.analyze(file.name, fileContent, mimeType);
-
-      if (data.tags && Array.isArray(data.tags)) {
-        setSuggestedTags(data.tags.slice(0, 5));
-        setSelectedSuggestions(data.tags.slice(0, 1));
-        if (data.summary) setUploadSummary(data.summary);
-      } else {
-        throw new Error("Invalid format");
-      }
-    } catch (err) {
-      // Graceful fallback if AI is unavailable — suggest a couple of basic tags.
-      console.error(err);
-      const baseTags = ["Q3 Review", "Draft", "V1", "Asset", "Document", "Design", "Raw"];
-      const extTag = extension.toUpperCase();
-      const random1 = baseTags[Math.floor(Math.random() * baseTags.length)];
-      setSuggestedTags([extTag, random1]);
-      setSelectedSuggestions([extTag]);
-    }
-
-    setIsAnalyzing(false);
   };
 
   /**
-   * Dropping or picking more than one file skips the single-file AI-tagging
-   * confirm step (reviewing ten files one at a time defeats the point of a
-   * batch) and just uploads them straight into the current folder, tracked
-   * in a lightweight progress queue instead.
+   * Dropping or picking more than one file skips the single-file confirm
+   * step (reviewing ten files one at a time defeats the point of a batch)
+   * and just uploads them straight into the current folder, tracked in a
+   * lightweight progress queue instead.
    */
   const handleMultiFileUpload = async (rawFiles: File[]) => {
     // Multi-file upload is a Studio+ feature. Rather than silently dropping
@@ -705,10 +668,10 @@ export function FileVaultApp({
           created: "Just now",
           source: "Desboard",
           status: "Draft",
-          owner: "Elias M.",
+          owner: displayName,
           tags: [],
           access: ["Team"],
-          versions: [{ version: "v1.0", date: "Just now", author: "Elias M.", latest: true }],
+          versions: [{ version: "v1.0", date: "Just now", author: displayName, latest: true }],
           projectId: selectedFilterProject,
           clientId: null,
           parentId: currentFolderId,
@@ -765,10 +728,10 @@ export function FileVaultApp({
               ? "OneDrive"
               : "Desboard",
       status: "Draft",
-      owner: "Elias M.",
-      tags: selectedSuggestions,
+      owner: displayName,
+      tags: [],
       access: ["Team"],
-      versions: [{ version: "v1.0", date: "Just now", author: "Elias M.", latest: true }],
+      versions: [{ version: "v1.0", date: "Just now", author: displayName, latest: true }],
       projectId: selectedFilterProject,
       clientId: null,
       parentId: currentFolderId,
@@ -804,7 +767,7 @@ export function FileVaultApp({
         selectedFile.id,
         base64,
         file.type || "application/octet-stream",
-        "Elias M."
+        displayName
       );
       setFilesList((prev) => prev.map((f) => (f.id === updated.id ? updated : f)));
       setSelectedFile(updated);
@@ -872,21 +835,6 @@ export function FileVaultApp({
     api.updateFile(updatedFile.id, patch).catch((e) => console.error("Failed to update link", e));
   };
 
-  const sendFileChat = async (prompt: string) => {
-    if (!selectedFile) return;
-    setAiChatInput("");
-    setAiChatResponses((prev) => [...prev, { role: "user", text: prompt }]);
-    setIsAiLoading(true);
-    try {
-      const text = await api.chat(prompt, selectedFile);
-      setAiChatResponses((prev) => [...prev, { role: "ai", text }]);
-    } catch {
-      setAiChatResponses((prev) => [...prev, { role: "ai", text: "Error connecting to AI." }]);
-    } finally {
-      setIsAiLoading(false);
-    }
-  };
-
   const isSearching = searchQuery.trim().length > 0;
   let currentFilteredFiles = filesList;
   if (selectedFilterProject !== null) {
@@ -923,6 +871,10 @@ export function FileVaultApp({
 
   const getFileIcon = (file: VaultFile) => {
     if (file.type === "folder") return <Folder className="w-8 h-8 text-muted" />;
+    // Checked by mime first, not just the .mp4 extension case below — a
+    // .mov/.webm/etc. upload has the same real mime and deserves the same
+    // icon, not the generic fallback.
+    if (file.mime?.startsWith("video/")) return <Video className="w-8 h-8 text-muted" />;
     switch (file.extension) {
       case "pdf":
         return <FileText className="w-8 h-8 text-muted" />;
@@ -930,8 +882,6 @@ export function FileVaultApp({
         return <PenTool className="w-8 h-8 text-muted" />;
       case "fig":
         return <Figma className="w-8 h-8 text-muted" />;
-      case "mp4":
-        return <Video className="w-8 h-8 text-muted" />;
       case "png":
       case "jpg":
         return <ImageIcon className="w-8 h-8 text-muted" />;
@@ -1116,27 +1066,16 @@ export function FileVaultApp({
             </button>
             <div className="flex flex-col gap-1 flex-1 min-w-0 sm:max-w-sm">
               <div className="relative w-full border border-transparent focus-within:border-primary/50 rounded-full transition-colors bg-panel px-4 py-2 flex items-center gap-2">
-                {isSearchingAI && aiConfigured ? (
-                  <Sparkles className="w-4 h-4 text-primary animate-pulse" />
-                ) : (
-                  <Search className="w-4 h-4 text-muted" />
-                )}
+                <Search className="w-4 h-4 text-muted" />
                 <input
                   ref={searchInputRef}
                   type="text"
-                  placeholder={
-                    aiConfigured === false
-                      ? "Search files or tags…"
-                      : "Search files, tags, or use phrases like 'show branding'..."
-                  }
+                  placeholder="Search files or tags…"
                   className="bg-transparent border-none outline-none text-[13px] w-full text-ink placeholder:text-muted"
                   value={searchQuery}
                   onChange={(e) => setSearchQuery(e.target.value)}
                 />
               </div>
-              {/* Honest about what's actually running: AI search is bring-your-own-key,
-                  so a fresh instance silently falls back to keyword matching — say so
-                  instead of letting the Sparkles icon imply more than it delivers. */}
               {aiConfigured === false && searchQuery.trim() && (
                 <span className="px-4 text-[10.5px] text-muted">
                   Keyword matches only — this instance has no Anthropic API key configured for AI-ranked results.
@@ -1234,49 +1173,6 @@ export function FileVaultApp({
                   </button>
                 </div>
 
-                <div className="bg-panel border border-line rounded-xl p-5 mb-6 relative overflow-hidden">
-                  {isAnalyzing ? (
-                    <div className="flex flex-col items-center justify-center py-6">
-                      <Sparkles className="w-6 h-6 text-moss animate-pulse mb-3" />
-                      <span className="text-[13px] text-moss">AI analyzing content...</span>
-                    </div>
-                  ) : (
-                    <div className="flex flex-col gap-4">
-                      {uploadSummary && (
-                        <div className="text-[13px] text-ink/70 leading-relaxed border-b border-line pb-4">{uploadSummary}</div>
-                      )}
-                      <div>
-                        <div className="flex justify-between items-end mb-3">
-                          <div className="flex items-center gap-2">
-                            <Sparkles className="w-4 h-4 text-moss" />
-                            <span className="text-[13px] font-medium text-moss">Suggested tags</span>
-                          </div>
-                          <span className="text-[11px] text-muted">{selectedSuggestions.length} selected</span>
-                        </div>
-                        <div className="flex flex-wrap gap-2">
-                          {suggestedTags.map((tag) => (
-                            <button
-                              key={tag}
-                              title={tag}
-                              onClick={() =>
-                                setSelectedSuggestions((prev) => (prev.includes(tag) ? prev.filter((t) => t !== tag) : [...prev, tag]))
-                              }
-                              className={`px-3 py-1.5 rounded-full text-[12px] transition-all ${
-                                selectedSuggestions.includes(tag)
-                                  ? "bg-moss/15 text-moss"
-                                  : "bg-chip text-ink/60 hover:text-ink"
-                              }`}
-                            >
-                              {selectedSuggestions.includes(tag) && <Check className="w-3 h-3 inline-block mr-1 -mt-0.5" />}
-                              {tag}
-                            </button>
-                          ))}
-                        </div>
-                      </div>
-                    </div>
-                  )}
-                </div>
-
                 <div className="mb-6 flex flex-col gap-2">
                   <span className="text-[13px] text-muted block">Upload destination</span>
                   <div className="flex gap-2">
@@ -1332,12 +1228,10 @@ export function FileVaultApp({
                     Cancel
                   </button>
                   <button
-                    disabled={isAnalyzing || !uploadDestination}
+                    disabled={!uploadDestination}
                     onClick={handleConfirmUpload}
                     className={`flex-1 py-2.5 rounded-lg text-[13px] font-semibold transition-all flex items-center justify-center gap-2 ${
-                      isAnalyzing || !uploadDestination
-                        ? "bg-chip text-muted"
-                        : "bg-primary text-white hover:bg-primary/85"
+                      !uploadDestination ? "bg-chip text-muted" : "bg-primary text-white hover:bg-primary/85"
                     }`}
                   >
                     <Upload className="w-3.5 h-3.5" /> Confirm &amp; Upload
@@ -1574,7 +1468,20 @@ export function FileVaultApp({
             )}
           </div>
 
-          {viewMode === "grid" ? (
+          {filteredFiles.length === 0 ? (
+            <div className="text-center py-16 border border-dashed border-line rounded-2xl">
+              {filesList.length === 0 ? (
+                <>
+                  <p className="text-[13px] text-ink/70 mb-1">No files yet</p>
+                  <p className="text-[12.5px] text-muted">Upload one to get started.</p>
+                </>
+              ) : isSearching ? (
+                <p className="text-[13px] text-ink/70">No files match "{searchQuery.trim()}".</p>
+              ) : (
+                <p className="text-[13px] text-ink/70">No files here.</p>
+              )}
+            </div>
+          ) : viewMode === "grid" ? (
             <div className="grid grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-3">
               {filteredFiles.map((file) => (
                 <div
@@ -1849,14 +1756,6 @@ export function FileVaultApp({
                 >
                   Links
                 </button>
-                <button
-                  onClick={() => setActiveTab("ai")}
-                  className={`flex-1 min-w-[60px] pb-2 border-b-2 transition-colors flex items-center justify-center gap-1 ${
-                    activeTab === "ai" ? "border-primary text-primary font-medium" : "border-transparent text-moss hover:text-moss/80"
-                  }`}
-                >
-                  <Sparkles className="w-3 h-3" /> AI
-                </button>
               </div>
 
               {activeTab === "details" && (
@@ -2094,49 +1993,6 @@ export function FileVaultApp({
                 </div>
               )}
 
-              {activeTab === "ai" && (
-                <div className="flex flex-col h-full gap-4 relative">
-                  <div className="flex-1 overflow-y-auto pr-2 pb-20 max-h-[300px] flex flex-col gap-4">
-                    {aiChatResponses.length === 0 && (
-                      <div className="text-center p-4">
-                        <Sparkles className="w-8 h-8 text-moss/50 mx-auto mb-3" />
-                        <p className="text-[13px] text-ink/70 mb-1">Ask AI about this file</p>
-                        <p className="text-[12px] text-muted">Generate summaries, extract action items, or ask questions.</p>
-                      </div>
-                    )}
-                    {aiChatResponses.map((msg, idx) => (
-                      <div key={idx} className={`flex flex-col ${msg.role === "user" ? "items-end" : "items-start"}`}>
-                        <div
-                          className={`px-3 py-2 rounded-xl text-[13px] max-w-[90%] whitespace-pre-wrap ${
-                            msg.role === "user" ? "bg-ink text-paper rounded-br-none" : "bg-moss/10 text-ink rounded-bl-none"
-                          }`}
-                        >
-                          {msg.text}
-                        </div>
-                      </div>
-                    ))}
-                    {isAiLoading && (
-                      <div className="flex items-start">
-                        <div className="px-3 py-2 rounded-xl text-[13px] bg-moss/10 text-muted rounded-bl-none">
-                          <Sparkles className="w-3 h-3 animate-pulse" />
-                        </div>
-                      </div>
-                    )}
-                  </div>
-                  <div className="absolute bottom-0 inset-x-0 bg-paper pt-2 border-t border-line">
-                    <input
-                      type="text"
-                      placeholder="Ask anything..."
-                      value={aiChatInput}
-                      onChange={(e) => setAiChatInput(e.target.value)}
-                      onKeyDown={(e) => {
-                        if (e.key === "Enter" && aiChatInput.trim() && !isAiLoading) sendFileChat(aiChatInput.trim());
-                      }}
-                      className="w-full bg-panel border border-transparent rounded-lg px-3 py-2.5 text-[13px] text-ink focus:outline-none focus:border-moss/50 transition-all"
-                    />
-                  </div>
-                </div>
-              )}
             </div>
           </div>
         </div>

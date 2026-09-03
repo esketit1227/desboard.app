@@ -205,16 +205,7 @@ export function EditorialHero() {
    everywhere else.
    ========================================================================== */
 
-const INTEGRATIONS = [
-  "Google Drive",
-  "Dropbox",
-  "OneDrive",
-  "Google",
-  "Microsoft",
-  "Apple",
-  "Resend",
-  "Stripe",
-];
+const INTEGRATIONS = ["Google Drive", "Dropbox", "OneDrive", "Google", "Microsoft", "Apple"];
 
 export function IntegrationMarquee() {
   const row = [...INTEGRATIONS, ...INTEGRATIONS];
@@ -382,20 +373,10 @@ export function KeyFeatures() {
                   className="aspect-[4/3] rounded-[10px] object-cover w-full h-full"
                 />
               </div>
-              <div className="flex gap-1.5 flex-wrap">
-                {["AI tags", "OCR", "Duplicates", "Visual match"].map((t) => (
-                  <span
-                    key={t}
-                    className="bg-[var(--ed-bg-alt)] rounded-full px-2.5 py-1 text-[11.5px] text-[var(--ed-ink-secondary)]"
-                  >
-                    {t}
-                  </span>
-                ))}
-              </div>
             </div>
             <FeatureCopy
               title="Find anything you&#8217;ve ever made"
-              body="Search every connected cloud from one place, including the years of work that never passed through a review tool. Ask for it the way you remember it."
+              body="Search every connected cloud from one place, including the years of work that never passed through a review tool — by name, tag, or status."
             />
           </FeatureCell>
 
@@ -629,7 +610,7 @@ const PRODUCT_BLOCKS: ProductBlockData[] = [
       { verb: "Version", phrase: "every upload keeps its history, restorable anytime" },
       { verb: "Organize", phrase: "folders, tags, and projects that actually nest" },
       { verb: "Preview", phrase: "open images, video, and documents in place" },
-      { verb: "Search", phrase: "find a file by describing it, not naming it" },
+      { verb: "Search", phrase: "find a file by name, tag, or status in one place" },
     ],
   },
   {
@@ -720,13 +701,6 @@ export function ProductBlocks() {
 export function PrincipleQuote() {
   return (
     <div className="editorial-invert bg-[var(--ed-bg)] relative overflow-hidden">
-      <img
-        src="/marketing/ai-particles.gif"
-        alt=""
-        aria-hidden="true"
-        loading="lazy"
-        className="absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 w-[min(90vw,760px)] h-[min(90vw,760px)] opacity-40 pointer-events-none select-none"
-      />
       <div className="relative max-w-[900px] mx-auto px-6 sm:px-10 py-32 sm:py-44 text-center">
         <Reveal>
           <p className="text-[clamp(26px,3.4vw,44px)] leading-[1.25] tracking-[-0.02em] text-[var(--ed-ink)]">
@@ -754,10 +728,10 @@ export function UpdateSpotlight() {
             Now on Studio
           </span>
           <h2 className="text-[clamp(30px,4vw,52px)] font-medium leading-[1.05] tracking-[-0.03em] text-[var(--ed-ink)] mt-5">
-            AI search, built in.
+            Real folders. Real bulk moves.
           </h2>
           <p className="text-[17px] text-[var(--ed-ink-secondary)] mt-5 max-w-[50ch] mx-auto leading-[1.5]">
-            Find any file by describing it. New uploads get tagged automatically the moment they land in the vault.
+            Nest folders the way you would on your own desktop, then tag, move, or download a whole batch in one shot.
           </p>
           <div className="mt-9">
             <ArrowLink href="/pricing">See plans</ArrowLink>
@@ -774,9 +748,8 @@ export function UpdateSpotlight() {
 
 const CAROUSEL_SLIDES: { title: string; body: string; video?: string }[] = [
   {
-    title: "AI search & tagging",
-    body: "Describe a file instead of hunting for it. New uploads get tag suggestions automatically.",
-    video: "/marketing/ai-orb.mp4",
+    title: "Video & image proofing",
+    body: "Drop a pin at the exact frame or spot, and it stays attached to that version — no more \"see attached screenshot.\"",
   },
   {
     title: "White-label portal",

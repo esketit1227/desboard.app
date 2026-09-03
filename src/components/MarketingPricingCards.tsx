@@ -53,7 +53,6 @@ const TIERS: Tier[] = [
       "1TB pooled storage",
       "Unlimited handovers",
       "Folder nesting & bulk actions",
-      "AI tagging & semantic search",
       "White-label portal, full RBAC",
     ],
   },

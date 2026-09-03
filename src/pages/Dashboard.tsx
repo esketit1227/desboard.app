@@ -22,7 +22,6 @@ import {
 } from "lucide-react";
 import { AnimatePresence, motion } from "motion/react";
 import { Toast } from "../components/Toast";
-import { AssistantBox } from "../components/assistant/AssistantBox";
 import { ActivityList } from "../components/home/ActivityList";
 import { InsightRail } from "../components/home/InsightRail";
 import { CelebrationBanner } from "../components/home/CelebrationBanner";
@@ -43,7 +42,7 @@ import type { DashboardData, DashboardInsight, VaultFile, ProjectFull } from "..
 
 /**
  * The Dashboard is the app shell. The left area shows either the "home" screen
- * (logo, menu, greeting + assistant) or an open app rendered inline, filling
+ * (logo, menu, greeting) or an open app rendered inline, filling
  * that area. The right-hand column of widget cards launches / switches apps.
  * There is no floating-window or dock system — one app is visible at a time,
  * in place. Each app (Projects, File Vault, Client Portal, Calendar) lives in
@@ -75,7 +74,7 @@ const NAV_ITEMS: NavItem[] = [
   { key: "client", label: "Client Portal", icon: Users, kind: "app" },
   { key: "calendar", label: "Calendar", icon: CalendarIcon, kind: "app" },
   { key: "messaging", label: "Messaging", icon: MessageSquare, kind: "app" },
-  { key: "team", label: "Roster", icon: Contact, kind: "app" },
+  { key: "team", label: "Contacts", icon: Contact, kind: "app" },
   { key: "connections", label: "Connections", icon: Cloud, kind: "app" },
   { key: "settings", label: "Settings", icon: SettingsIcon, kind: "app" },
 ];
@@ -317,7 +316,7 @@ export function Dashboard() {
           />
         );
       case "team":
-        return <TeamApp showToast={showToast} />;
+        return <TeamApp showToast={showToast} onOpenSettings={() => openWindow("settings")} />;
       case "connections":
         return <ConnectionsApp showToast={showToast} />;
       case "messaging":
@@ -343,14 +342,7 @@ export function Dashboard() {
     }
   };
 
-  const activeTitle =
-    activeView === "files"
-      ? "File Vault"
-      : activeView === "client"
-      ? "Client Portal"
-      : activeView
-      ? activeView.charAt(0).toUpperCase() + activeView.slice(1)
-      : "";
+  const activeTitle = activeView ? NAV_ITEMS.find((i) => i.key === activeView)?.label ?? "" : "";
 
   const isNavActive = (item: NavItem) =>
     item.kind === "home" ? activeView === null && activeMenu === "home" : item.kind === "app" ? activeView === item.key : activeMenu === item.key;
@@ -538,30 +530,39 @@ export function Dashboard() {
                   className="flex flex-col min-[1200px]:flex-row gap-8 items-start justify-center"
                 >
                   <div className="flex-1 w-full min-w-0 max-w-[720px]">
-                    <div className="mb-8" style={{ fontFamily: "var(--font-serif)" }}>
-                      <p className="italic text-[19px] text-muted mb-1.5">
-                        {greeting()}, {firstName}.
-                      </p>
-                      {dash ? (
-                        <p className="text-[27px] leading-[1.3] text-ink">
-                          {dash.greetingFact.lead && `${dash.greetingFact.lead} `}
-                          {dash.greetingFact.entityLabel &&
-                            (dash.greetingFact.projectId ? (
-                              <button
-                                type="button"
-                                onClick={() => openProject(dash.greetingFact.projectId!, !!dash.greetingFact.openHandovers)}
-                                className="underline decoration-1 underline-offset-4 decoration-muted/40 hover:decoration-primary hover:text-primary transition-colors"
-                              >
-                                {dash.greetingFact.entityLabel}
-                              </button>
-                            ) : (
-                              <span>{dash.greetingFact.entityLabel}</span>
-                            ))}
-                          {dash.greetingFact.trail}
+                    <div className="relative overflow-hidden rounded-2xl mb-8 h-[300px] sm:h-[420px] flex items-end">
+                      <img
+                        src="/marketing/home-hero.gif"
+                        alt=""
+                        aria-hidden="true"
+                        className="absolute inset-0 w-full h-full object-cover"
+                      />
+                      <div className="absolute inset-0 bg-gradient-to-t from-black/75 via-black/15 to-transparent" />
+                      <div className="relative p-6 sm:p-8 w-full" style={{ fontFamily: "var(--font-serif)" }}>
+                        <p className="italic text-[19px] text-white/80 mb-1.5">
+                          {greeting()}, {firstName}.
                         </p>
-                      ) : (
-                        <div className="h-[35px] w-2/3 bg-chip rounded animate-pulse" />
-                      )}
+                        {dash ? (
+                          <p className="text-[27px] leading-[1.3] text-white">
+                            {dash.greetingFact.lead && `${dash.greetingFact.lead} `}
+                            {dash.greetingFact.entityLabel &&
+                              (dash.greetingFact.projectId ? (
+                                <button
+                                  type="button"
+                                  onClick={() => openProject(dash.greetingFact.projectId!, !!dash.greetingFact.openHandovers)}
+                                  className="underline decoration-1 underline-offset-4 decoration-white/40 hover:decoration-white transition-colors"
+                                >
+                                  {dash.greetingFact.entityLabel}
+                                </button>
+                              ) : (
+                                <span>{dash.greetingFact.entityLabel}</span>
+                              ))}
+                            {dash.greetingFact.trail}
+                          </p>
+                        ) : (
+                          <div className="h-[35px] w-2/3 bg-white/20 rounded animate-pulse" />
+                        )}
+                      </div>
                     </div>
 
                     <TrialBanner onOpenBilling={() => openWindow("settings")} />
@@ -573,9 +574,6 @@ export function Dashboard() {
                       // unseen history and silently swallowed instead of celebrated.
                       <CelebrationBanner completedApprovals={dash.completedApprovals} onOpenProject={(projectId) => openProject(projectId, true)} />
                     )}
-
-                    {/* Featured card — the assistant, the page's one glow moment */}
-                    <AssistantBox onOpenFile={openFile} />
 
                     <ActivityList
                       dash={dash}

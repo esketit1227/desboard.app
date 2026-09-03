@@ -31,7 +31,6 @@ const ROWS: {
       { label: "Image & video proofing", trial: true, freelance: true, studio: true, enterprise: true },
       { label: "Folder nesting", trial: true, freelance: false, studio: true, enterprise: true },
       { label: "Bulk actions & multi-upload", trial: true, freelance: false, studio: true, enterprise: true },
-      { label: "AI tagging & search", trial: true, freelance: false, studio: true, enterprise: true },
     ],
   },
   {

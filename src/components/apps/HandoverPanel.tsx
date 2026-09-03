@@ -39,7 +39,7 @@ import type {
 } from "../../types";
 import { api } from "../../lib/api";
 import { renderHandoverPage, effectiveBranding } from "../../lib/handoverPage";
-import { isApprovalCurrent } from "../../lib/filePreview";
+import { isApprovalCurrent, previewableKind, contentUrl } from "../../lib/filePreview";
 import { HandoverFileRow } from "./HandoverFileRow";
 import { TemplateThumbnail } from "../TemplateThumbnail";
 
@@ -388,6 +388,24 @@ export function HandoverPanel({
     }
   };
 
+  /**
+   * The one explicit, unambiguous way to actually deliver a Draft to its
+   * client — the status pill's own click-to-cycle is still there for
+   * Sent -> Accepted, but Draft -> Sent is the transition that exposes the
+   * package to someone outside the studio, so it gets its own button
+   * instead of relying on a person discovering the pill is clickable.
+   */
+  const sendToClient = async (h: Handover) => {
+    setHandovers((prev) => prev.map((x) => (x.id === h.id ? { ...x, status: "Sent" } : x)));
+    try {
+      await api.updateHandover(h.id, { status: "Sent" });
+      showToast(`Sent "${h.title}" to ${h.clientName || h.recipient || "the client"}`);
+    } catch (e) {
+      console.error("Failed to send handover", e);
+      refresh();
+    }
+  };
+
   const removeHandover = async (h: Handover) => {
     setHandovers((prev) => prev.filter((x) => x.id !== h.id));
     try {
@@ -608,6 +626,10 @@ export function HandoverPanel({
                                 const file = files.find((f) => f.id === fid);
                                 const changesRequested = approval?.status === "changes_requested";
                                 const approved = approval?.status === "approved" && isApprovalCurrent(approval, file);
+                                // PDFs/generic files fall back to a plain icon here —
+                                // an iframe-rendered PDF at chip scale isn't legible,
+                                // unlike the larger preview in the file-selection list.
+                                const kind = file ? previewableKind(file) : null;
                                 return (
                                   <span
                                     key={fid}
@@ -618,7 +640,7 @@ export function HandoverPanel({
                                           ? "Approved by the client"
                                           : "Not yet approved by the client"
                                     }
-                                    className={`flex items-center gap-1 px-2 py-1 rounded-full text-[11px] ${
+                                    className={`flex items-center gap-1.5 pl-1 pr-2 py-1 rounded-full text-[11px] ${
                                       changesRequested
                                         ? "border border-ink text-ink"
                                         : approved
@@ -626,13 +648,20 @@ export function HandoverPanel({
                                           : "bg-chip text-ink/60"
                                     }`}
                                   >
+                                    <span className="w-4 h-4 rounded-full overflow-hidden bg-panel shrink-0 flex items-center justify-center">
+                                      {file && kind === "image" ? (
+                                        <img src={contentUrl(file)} alt="" className="w-full h-full object-cover" />
+                                      ) : file && kind === "video" ? (
+                                        <video src={contentUrl(file)} className="w-full h-full object-cover" muted />
+                                      ) : (
+                                        <FileText className="w-2.5 h-2.5 text-muted" />
+                                      )}
+                                    </span>
                                     {changesRequested ? (
-                                      <AlertTriangle className="w-3 h-3" />
+                                      <AlertTriangle className="w-3 h-3 shrink-0" />
                                     ) : approved ? (
-                                      <Check className="w-3 h-3" />
-                                    ) : (
-                                      <FileText className="w-3 h-3" />
-                                    )}{" "}
+                                      <Check className="w-3 h-3 shrink-0" />
+                                    ) : null}
                                     {fileName(fid)}
                                   </span>
                                 );
@@ -645,6 +674,15 @@ export function HandoverPanel({
                               <Calendar className="w-3 h-3" /> {h.created} • {h.fileIds.length} file{h.fileIds.length === 1 ? "" : "s"}
                             </span>
                             <div className="flex flex-wrap items-center gap-1.5">
+                              {h.status === "Draft" && (
+                                <button
+                                  onClick={() => sendToClient(h)}
+                                  title="Send this delivery to the client"
+                                  className="flex items-center gap-1.5 text-[11.5px] font-semibold text-white bg-primary hover:bg-primary/85 px-2.5 py-1.5 rounded-full transition-colors"
+                                >
+                                  <Send className="w-3 h-3" /> Send to client
+                                </button>
+                              )}
                               {h.status === "Sent" && h.clientEmail && (
                                 <button
                                   onClick={() => remindClient(h)}
@@ -890,7 +928,11 @@ export function HandoverPanel({
                     <div className="flex flex-col gap-2">
                       {(
                         [
-                          { key: "invite", label: "Invite only", hint: "Only people you send the link to. Default." },
+                          {
+                            key: "invite",
+                            label: "Invite only",
+                            hint: "Only people you send the link to. Like Public, the link itself is the key — not tied to a specific email. Default.",
+                          },
                           { key: "password", label: "Password", hint: "The link plus a password you share separately." },
                           { key: "public", label: "Public link", hint: "Anyone who has the URL. Use with care." },
                         ] as { key: PortalAccessMode; label: string; hint: string }[]

@@ -1251,9 +1251,13 @@ export function renderHandoverPage({
         currentFileId = fileId;
         lbTitle.textContent = meta.name;
         populateVersionPicker(fileId);
-        panelOpen = true;
-        if (panelEl) panelEl.classList.remove('collapsed');
-        if (panelToggleBtn) panelToggleBtn.classList.add('active');
+        // On a narrow viewport the panel is a full-screen overlay (see the
+        // 760px CSS breakpoint above), so it should start closed — opening
+        // straight into a wall of notes would hide the media the client
+        // came here to look at. Desktop keeps the panel open by default.
+        panelOpen = window.innerWidth > 760;
+        if (panelEl) panelEl.classList.toggle('collapsed', !panelOpen);
+        if (panelToggleBtn) panelToggleBtn.classList.toggle('active', panelOpen);
         renderStage(fileId, null, startTime);
 
         lightbox.classList.add('open');
@@ -1615,6 +1619,33 @@ export function renderHandoverPage({
   .pin-composer[hidden] { display: none; }
   .pin-composer .c-input { background: rgba(255,255,255,0.05); border-color: rgba(255,255,255,0.1); color: #f5f5f7; }
   .pin-composer-actions { display: flex; justify-content: flex-end; gap: 8px; }
+
+  /* Below this width the topbar's controls and the 300px-wide notes panel
+     can't share the screen with the media itself — a phone showing both at
+     once squeezes the actual image/video into an unusable sliver. The panel
+     becomes a full-screen overlay toggled by the existing Notes pill instead
+     of a permanent side column (see panelOpen's viewport check in the script
+     below), and the topbar wraps instead of clipping. */
+  @media (max-width: 760px) {
+    .lb-topbar { flex-wrap: wrap; padding: 10px 14px; gap: 8px 10px; }
+    .lb-title-group { width: 100%; }
+    .lb-actions { width: 100%; flex-wrap: wrap; gap: 6px 8px; }
+    .lb-stage { padding: 12px; }
+
+    .lb-main { position: relative; }
+    .lb-stage-col { width: 100%; }
+    .lb-panel {
+      position: absolute;
+      inset: 0;
+      width: 100%;
+      max-width: 100%;
+      border-left: none;
+      background: rgba(8, 8, 10, 0.98);
+      z-index: 5;
+      transition: opacity .18s ease;
+    }
+    .lb-panel.collapsed { opacity: 0; pointer-events: none; }
+  }
 
   /* --- Template: Minimal — quiet and utilitarian; the studio's own brand is
      the point, this page should have as little personality of its own as

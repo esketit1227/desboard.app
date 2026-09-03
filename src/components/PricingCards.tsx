@@ -66,7 +66,6 @@ const TIERS: Tier[] = [
       "Unlimited handovers",
       "Everything in Freelance, plus:",
       "Folder nesting & bulk file actions",
-      "AI tagging & semantic search",
       "White-label portal (custom domain)",
       "Full team roles & permissions",
       "Priority email + chat support",
