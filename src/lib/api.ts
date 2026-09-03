@@ -74,6 +74,12 @@ export const api = {
   /** Redirects the browser to Stripe's hosted Billing Portal — same `window.location.href = url` pattern as checkout. */
   openBillingPortal: () => fetch("/api/billing/portal", { method: "POST" }).then((r) => toJson<{ url: string }>(r)),
 
+  /** Sets Studio's storage add-on to exactly `units` × 100GB — applies instantly (the card's already on file, no redirect), returning the refreshed billing status. */
+  buyStorageAddon: (units: number) =>
+    fetch("/api/billing/storage-addon", { method: "POST", headers: jsonHeaders, body: JSON.stringify({ units }) }).then((r) =>
+      toJson<BillingStatus>(r)
+    ),
+
   // --- Studio workspace members & invites (distinct from the /api/team contact directory below) ---
   getWorkspaceMembers: () => fetch("/api/team/members").then((r) => toJson<WorkspaceMember[]>(r)),
 

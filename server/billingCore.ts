@@ -97,3 +97,62 @@ export function tierForPriceId(
 ): { tier: PlanTier; interval: "month" | "year" } | null {
   return priceMap[priceId] ?? null;
 }
+
+/**
+ * Hand-shaped mirror of the one Stripe.SubscriptionItem shape this module
+ * cares about — deliberately not `Stripe.SubscriptionItem` itself, so this
+ * file stays free of the Stripe SDK, per its own convention. billing.ts maps
+ * the real SDK type down to this before calling anything below.
+ */
+export interface SubscriptionItemLike {
+  id: string;
+  priceId: string;
+  quantity: number | null | undefined;
+  currentPeriodEnd?: number | null;
+}
+
+/**
+ * Finds the plan item (Freelance/Studio price) among ALL of a subscription's
+ * items, not just the first one. Matters once a subscription can carry a
+ * second (storage add-on) item: reading only items[0] would silently misread
+ * tier/interval/seats depending on Stripe's own item ordering.
+ */
+export function resolvePlanFromItems(
+  items: SubscriptionItemLike[],
+  priceMap: Record<string, { tier: PlanTier; interval: "month" | "year" }>
+): { tier: PlanTier; interval: "month" | "year"; seats: number; currentPeriodEnd: number | null } | null {
+  for (const item of items) {
+    const resolved = tierForPriceId(item.priceId, priceMap);
+    if (resolved) return { ...resolved, seats: item.quantity ?? 1, currentPeriodEnd: item.currentPeriodEnd ?? null };
+  }
+  return null;
+}
+
+/** The purchased storage add-on quantity among a subscription's items — 0 if no such item exists (nothing bought yet) or the price isn't configured. */
+export function storageAddonUnitsFromItems(items: SubscriptionItemLike[], storageAddonPriceId: string | null): number {
+  if (!storageAddonPriceId) return 0;
+  return items.find((i) => i.priceId === storageAddonPriceId)?.quantity ?? 0;
+}
+
+/**
+ * The Stripe `items` array patch needed to make the add-on quantity exactly
+ * `targetUnits` — add the item if it doesn't exist, update its quantity if it
+ * does, remove it via `{deleted: true}` if the target is 0, or `null` if
+ * nothing would actually change (so the caller can skip the Stripe API call
+ * entirely on a no-op).
+ */
+export function buildStorageAddonItemsPatch(
+  items: SubscriptionItemLike[],
+  storageAddonPriceId: string,
+  targetUnits: number
+): Array<{ id?: string; price?: string; quantity?: number; deleted?: true }> | null {
+  const existing = items.find((i) => i.priceId === storageAddonPriceId) ?? null;
+  if (existing && (existing.quantity ?? 0) === targetUnits) return null;
+  if (targetUnits === 0) return existing ? [{ id: existing.id, deleted: true }] : null;
+  return existing ? [{ id: existing.id, quantity: targetUnits }] : [{ price: storageAddonPriceId, quantity: targetUnits }];
+}
+
+/** A storage add-on purchase must be a non-negative integer, capped well short of anything a fat-finger or abuse attempt could reach (50 units = +5TB). */
+export function isValidStorageAddonUnits(n: unknown): n is number {
+  return typeof n === "number" && Number.isInteger(n) && n >= 0 && n <= 50;
+}

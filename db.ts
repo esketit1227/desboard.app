@@ -60,6 +60,7 @@ import type {
   PlanTier,
   HandoverTemplate,
 } from "./src/types.ts";
+import { PLAUSIBLE_DEADLINE_WINDOW_MS } from "./src/types.ts";
 import { computeEffectiveTier, type EffectiveTier, type WorkspaceBillingRow } from "./server/billingCore.ts";
 import { TEMPLATES as HANDOVER_TEMPLATES } from "./src/lib/handoverPage.ts";
 
@@ -1437,6 +1438,13 @@ export function getWorkspaceStripeCustomerId(workspaceId: string): string | null
   return row?.stripe_customer_id ?? null;
 }
 
+export function getWorkspaceStripeSubscriptionId(workspaceId: string): string | null {
+  const row = db.prepare(`SELECT stripe_subscription_id FROM workspaces WHERE id = ?`).get(workspaceId) as
+    | { stripe_subscription_id: string | null }
+    | undefined;
+  return row?.stripe_subscription_id ?? null;
+}
+
 export function setWorkspaceStripeCustomerId(workspaceId: string, stripeCustomerId: string): void {
   db.prepare(`UPDATE workspaces SET stripe_customer_id = ? WHERE id = ?`).run(stripeCustomerId, workspaceId);
 }
@@ -2247,7 +2255,12 @@ export function getGreetingFact(workspaceId: string): GreetingFact {
   const activeProjects = getProjects(workspaceId).filter((p) => p.status !== "Archived");
   const deadlines = activeProjects
     .map((p) => ({ id: p.id, name: p.name, ts: Date.parse(p.deadline) }))
-    .filter((d) => !Number.isNaN(d.ts))
+    // Deadline is user-entered free text — a year-less string like "Nov 20"
+    // parses to a "valid" Date in some other year (JS defaults to 2001),
+    // which would otherwise win this sort by looking like the most
+    // overdue project in the workspace. Treat anything wildly far from
+    // today the same as an unparseable date: excluded, not displayed.
+    .filter((d) => !Number.isNaN(d.ts) && Math.abs(d.ts - Date.now()) < PLAUSIBLE_DEADLINE_WINDOW_MS)
     .sort((a, b) => a.ts - b.ts);
   if (deadlines.length > 0) {
     const d = deadlines[0];

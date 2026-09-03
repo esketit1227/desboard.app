@@ -87,6 +87,7 @@ import {
 } from "./db.ts";
 import { wouldExceedStorage, wouldExceedHandoverCap } from "./server/billingCore.ts";
 import type { DashboardData, Handover, VaultFile } from "./src/types.ts";
+import { PLAUSIBLE_DEADLINE_WINDOW_MS, PROJECT_STATUSES } from "./src/types.ts";
 import { createPortalRouter } from "./server/portal.ts";
 import { createOAuthRouter } from "./server/oauth.ts";
 import { createSsoRouter } from "./server/sso.ts";
@@ -542,6 +543,10 @@ async function startServer() {
   });
 
   app.patch("/api/projects/:id", (req: AuthedRequest, res) => {
+    const { status } = req.body as { status?: unknown };
+    if (status !== undefined && !(PROJECT_STATUSES as string[]).includes(status as string)) {
+      return res.status(400).json({ error: "Unknown project status" });
+    }
     const updated = updateProject(req.params.id, req.body, workspaceOf(req));
     if (!updated) return res.status(404).json({ error: "Project not found" });
     res.json(updated);
@@ -559,7 +564,9 @@ async function startServer() {
     const now = Date.now();
     const deadlines = projects
       .map((p) => ({ id: p.id, name: p.name, client: p.client, deadline: p.deadline, ts: Date.parse(p.deadline) }))
-      .filter((d) => !Number.isNaN(d.ts))
+      // See PLAUSIBLE_DEADLINE_WINDOW_MS's doc comment — a year-less
+      // free-text deadline still parses to a "valid" but wildly wrong Date.
+      .filter((d) => !Number.isNaN(d.ts) && Math.abs(d.ts - now) < PLAUSIBLE_DEADLINE_WINDOW_MS)
       .sort((a, b) => a.ts - b.ts)
       .map(({ ts, ...rest }) => ({ ...rest, daysLeft: Math.ceil((ts - now) / 86_400_000) }));
     const latestFile = files[0];

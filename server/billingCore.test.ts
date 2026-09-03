@@ -12,7 +12,12 @@ import {
   wouldExceedHandoverCap,
   wouldExceedSeatCap,
   tierForPriceId,
+  resolvePlanFromItems,
+  storageAddonUnitsFromItems,
+  buildStorageAddonItemsPatch,
+  isValidStorageAddonUnits,
   type WorkspaceBillingRow,
+  type SubscriptionItemLike,
 } from "./billingCore.ts";
 
 const baseRow: WorkspaceBillingRow = {
@@ -138,5 +143,88 @@ describe("tierForPriceId", () => {
   });
   it("returns null for an unrecognized price id", () => {
     expect(tierForPriceId("price_unknown", priceMap)).toBeNull();
+  });
+});
+
+const priceMap = { price_studio_m: { tier: "studio" as const, interval: "month" as const } };
+const planItem: SubscriptionItemLike = { id: "si_plan", priceId: "price_studio_m", quantity: 3, currentPeriodEnd: 1_700_000_000 };
+const addonItem: SubscriptionItemLike = { id: "si_addon", priceId: "price_addon", quantity: 2, currentPeriodEnd: 1_700_000_000 };
+
+describe("resolvePlanFromItems", () => {
+  it("resolves the plan item when it's the only item", () => {
+    expect(resolvePlanFromItems([planItem], priceMap)).toEqual({
+      tier: "studio",
+      interval: "month",
+      seats: 3,
+      currentPeriodEnd: 1_700_000_000,
+    });
+  });
+
+  it("resolves the plan item even when it isn't first — the items.data[0] regression case", () => {
+    expect(resolvePlanFromItems([addonItem, planItem], priceMap)).toEqual({
+      tier: "studio",
+      interval: "month",
+      seats: 3,
+      currentPeriodEnd: 1_700_000_000,
+    });
+  });
+
+  it("returns null when no item matches a known plan price", () => {
+    expect(resolvePlanFromItems([addonItem], priceMap)).toBeNull();
+  });
+
+  it("returns null for an empty items array", () => {
+    expect(resolvePlanFromItems([], priceMap)).toBeNull();
+  });
+});
+
+describe("storageAddonUnitsFromItems", () => {
+  it("returns the add-on item's quantity when present", () => {
+    expect(storageAddonUnitsFromItems([planItem, addonItem], "price_addon")).toBe(2);
+  });
+  it("returns 0 when no add-on item exists", () => {
+    expect(storageAddonUnitsFromItems([planItem], "price_addon")).toBe(0);
+  });
+  it("returns 0 when the add-on price isn't configured, regardless of items", () => {
+    expect(storageAddonUnitsFromItems([planItem, addonItem], null)).toBe(0);
+  });
+});
+
+describe("buildStorageAddonItemsPatch", () => {
+  it("adds a new item when none exists and the target is above zero", () => {
+    expect(buildStorageAddonItemsPatch([planItem], "price_addon", 3)).toEqual([{ price: "price_addon", quantity: 3 }]);
+  });
+  it("updates quantity when an item exists and the target differs", () => {
+    expect(buildStorageAddonItemsPatch([planItem, addonItem], "price_addon", 5)).toEqual([{ id: "si_addon", quantity: 5 }]);
+  });
+  it("is a no-op when an item exists and already matches the target", () => {
+    expect(buildStorageAddonItemsPatch([planItem, addonItem], "price_addon", 2)).toBeNull();
+  });
+  it("removes the item when the target is 0", () => {
+    expect(buildStorageAddonItemsPatch([planItem, addonItem], "price_addon", 0)).toEqual([{ id: "si_addon", deleted: true }]);
+  });
+  it("is a no-op when no item exists and the target is 0", () => {
+    expect(buildStorageAddonItemsPatch([planItem], "price_addon", 0)).toBeNull();
+  });
+});
+
+describe("isValidStorageAddonUnits", () => {
+  it("accepts 0 — removing the add-on is a valid target", () => {
+    expect(isValidStorageAddonUnits(0)).toBe(true);
+  });
+  it("accepts the upper boundary", () => {
+    expect(isValidStorageAddonUnits(50)).toBe(true);
+  });
+  it("rejects just past the upper boundary", () => {
+    expect(isValidStorageAddonUnits(51)).toBe(false);
+  });
+  it("rejects a negative count", () => {
+    expect(isValidStorageAddonUnits(-1)).toBe(false);
+  });
+  it("rejects a non-integer", () => {
+    expect(isValidStorageAddonUnits(1.5)).toBe(false);
+  });
+  it("rejects a non-number", () => {
+    expect(isValidStorageAddonUnits("3")).toBe(false);
   });
 });

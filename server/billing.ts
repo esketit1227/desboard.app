@@ -19,13 +19,20 @@ import {
   getWorkspaceBillingInfo,
   getWorkspaceIdByStripeCustomerId,
   getWorkspaceStripeCustomerId,
+  getWorkspaceStripeSubscriptionId,
   getActiveHandoverCount,
   getWorkspaceMemberCount,
   getWorkspaceStorageBytes,
   setWorkspaceStripeCustomerId,
   updateWorkspaceBilling,
 } from "../db.ts";
-import { tierForPriceId } from "./billingCore.ts";
+import {
+  resolvePlanFromItems,
+  storageAddonUnitsFromItems,
+  buildStorageAddonItemsPatch,
+  isValidStorageAddonUnits,
+  type SubscriptionItemLike,
+} from "./billingCore.ts";
 import { type AuthedRequest } from "./auth.ts";
 import { requireOwner } from "./invites.ts";
 import type { PlanTier } from "../src/types.ts";
@@ -54,7 +61,23 @@ function priceIdFor(tier: "freelance" | "studio", interval: Interval): string | 
   return process.env[key] || null;
 }
 
-/** Built once per call from current env vars (cheap, and lets a key rotation take effect without a restart-order dance) — passed into the pure tierForPriceId rather than read there, keeping billingCore.ts free of process.env access. */
+// Read fresh per use (see buildPriceMap's own comment) rather than cached at
+// module load, so a key rotation takes effect without a restart-order dance.
+function storageAddonPriceId(): string | null {
+  return process.env.STRIPE_PRICE_STORAGE_ADDON || null;
+}
+
+/** Maps the real Stripe SDK shape down to billingCore's SDK-free SubscriptionItemLike, once, at the one boundary that needs to know about Stripe.SubscriptionItem at all. */
+function mapItems(items: Stripe.SubscriptionItem[]): SubscriptionItemLike[] {
+  return items.map((i) => ({
+    id: i.id,
+    priceId: i.price.id,
+    quantity: i.quantity,
+    currentPeriodEnd: i.current_period_end ?? null,
+  }));
+}
+
+/** Built once per call from current env vars (cheap, and lets a key rotation take effect without a restart-order dance) — passed into the pure resolvePlanFromItems (which uses tierForPriceId internally) rather than read there, keeping billingCore.ts free of process.env access. */
 function buildPriceMap(): Record<string, { tier: PlanTier; interval: Interval }> {
   const map: Record<string, { tier: PlanTier; interval: Interval }> = {};
   (["freelance", "studio"] as const).forEach((tier) => {
@@ -79,6 +102,7 @@ function billingStatusPayload(workspaceId: string) {
     cancelAtPeriodEnd: info.cancelAtPeriodEnd,
     currentPeriodEnd: info.currentPeriodEnd,
     hasStripeCustomer: info.hasStripeCustomer,
+    storageAddonUnits: info.storageAddonUnits,
     limits,
     usage: {
       storageBytes: getWorkspaceStorageBytes(workspaceId),
@@ -95,6 +119,12 @@ function billingStatusPayload(workspaceId: string) {
  * {tier, interval} from the subscription's ACTUAL price (not whatever the
  * frontend originally requested at checkout) — what gets recorded reflects
  * what Stripe actually billed.
+ *
+ * Scans ALL of the subscription's items (via billingCore's resolvePlanFromItems),
+ * not just the first one — a Studio subscription can carry a second (storage
+ * add-on) item once one's been purchased, and reading only items[0] would
+ * silently misread tier/interval/seats depending on Stripe's own item order.
+ * Also persists stripeSubscriptionId, which nothing wrote before this.
  */
 async function applySubscriptionToWorkspace(subscription: Stripe.Subscription): Promise<void> {
   const workspaceId =
@@ -105,21 +135,27 @@ async function applySubscriptionToWorkspace(subscription: Stripe.Subscription): 
     return;
   }
 
-  const item = subscription.items.data[0];
-  const priceId = item?.price?.id;
-  const resolved = priceId ? tierForPriceId(priceId, buildPriceMap()) : null;
+  const items = mapItems(subscription.items.data);
+  const resolved = resolvePlanFromItems(items, buildPriceMap());
   if (!resolved) {
-    console.error("[billing] Subscription", subscription.id, "has an unrecognized price", priceId);
+    console.error(
+      "[billing] Subscription",
+      subscription.id,
+      "has no item matching a known plan price",
+      items.map((i) => i.priceId)
+    );
     return;
   }
 
   updateWorkspaceBilling(workspaceId, {
     planTier: resolved.tier,
     planInterval: resolved.interval,
-    seats: item.quantity ?? 1,
+    seats: resolved.seats,
+    stripeSubscriptionId: subscription.id,
     subscriptionStatus: subscription.status,
-    currentPeriodEnd: item.current_period_end ? new Date(item.current_period_end * 1000).toISOString() : null,
+    currentPeriodEnd: resolved.currentPeriodEnd ? new Date(resolved.currentPeriodEnd * 1000).toISOString() : null,
     cancelAtPeriodEnd: subscription.cancel_at_period_end,
+    storageAddonUnits: storageAddonUnitsFromItems(items, storageAddonPriceId()),
   });
 }
 
@@ -248,6 +284,44 @@ export function createBillingRouter(): Router {
     });
     if (!session.url) return res.status(500).json({ error: "Could not start checkout — try again" });
     res.json({ url: session.url });
+  });
+
+  // Buys (or reduces/removes) Studio's storage add-on as a second recurring
+  // line item on the workspace's EXISTING subscription — never a new
+  // Checkout Session, matching the same reasoning as the "no
+  // adjustable_quantity" note on /checkout above: a customer who already has
+  // an active subscription must change it in place, never end up
+  // double-subscribed. Applies instantly (no redirect) since the card is
+  // already on file; the async webhook re-applies the same state moments
+  // later as a harmless, idempotent confirmation.
+  router.post("/api/billing/storage-addon", requireOwner, async (req: AuthedRequest, res) => {
+    if (!stripe) return res.status(503).json({ error: "Billing isn't available right now — please try again later." });
+    const priceId = storageAddonPriceId();
+    if (!priceId) return res.status(503).json({ error: "Extra storage isn't available to buy yet — please try again later." });
+
+    const { units } = req.body as { units?: number };
+    if (!isValidStorageAddonUnits(units)) {
+      return res.status(400).json({ error: "Enter a valid number of storage add-on units" });
+    }
+
+    const workspaceId = req.auth!.workspaceId;
+    const info = getWorkspaceBillingInfo(workspaceId);
+    const subscriptionId = getWorkspaceStripeSubscriptionId(workspaceId);
+    if (info.planTier !== "studio" || info.subscriptionStatus !== "active" || !subscriptionId) {
+      return res.status(400).json({ error: "You need an active Studio subscription before you can buy more storage." });
+    }
+
+    const subscription = await stripe.subscriptions.retrieve(subscriptionId);
+    const patch = buildStorageAddonItemsPatch(mapItems(subscription.items.data), priceId, units);
+    if (patch) {
+      await stripe.subscriptions.update(subscriptionId, { items: patch, proration_behavior: "always_invoice" });
+      // Write immediately from this request's own validated value — the
+      // update call above is Stripe's own synchronous confirmation the
+      // change took. The subscription.updated webhook re-applies the same
+      // state shortly after; redundant, but harmless (idempotent).
+      updateWorkspaceBilling(workspaceId, { storageAddonUnits: units });
+    }
+    res.json(billingStatusPayload(workspaceId));
   });
 
   router.post("/api/billing/portal", requireOwner, async (req: AuthedRequest, res) => {

@@ -8,6 +8,18 @@
  * needs updating.
  */
 
+/**
+ * `ProjectFull.deadline` is user-entered free text, not a validated date —
+ * a year-less string like "Nov 20" still parses via Date.parse (JS defaults
+ * the missing year to 2001), so a plain NaN check after parsing doesn't
+ * catch it. Every site that parses `deadline` as a date (db.ts's home-screen
+ * greeting, server.ts's dashboard payload, CalendarApp.tsx's marker
+ * placement) should also reject anything further from today than this
+ * window, rather than displaying a wildly-wrong "was due N days ago" or
+ * silently misplacing a marker decades in the past.
+ */
+export const PLAUSIBLE_DEADLINE_WINDOW_MS = 5 * 365 * 24 * 60 * 60 * 1000;
+
 export type FileStatus = "Draft" | "Review" | "Approved" | "Delivered";
 
 export interface FileVersion {
@@ -47,6 +59,8 @@ export interface VaultFile {
 }
 
 export type ProjectStatus = "Planning" | "In Progress" | "Review" | "Archived";
+/** Runtime-checkable mirror of ProjectStatus, for validating a PATCH body's status field server-side. */
+export const PROJECT_STATUSES: ProjectStatus[] = ["Planning", "In Progress", "Review", "Archived"];
 
 export interface ProjectLinked {
   files: number;
@@ -511,6 +525,8 @@ export interface BillingStatus {
   currentPeriodEnd: string | null;
   /** Whether this workspace has ever completed a checkout — gates whether Settings shows "Manage billing" vs. upgrade CTAs. */
   hasStripeCustomer: boolean;
+  /** Studio-only: purchased 100GB storage add-on units, already folded into limits.storageCapBytes — surfaced separately so Settings can show/edit the raw count. */
+  storageAddonUnits: number;
   limits: PlanLimits;
   usage: {
     storageBytes: number;

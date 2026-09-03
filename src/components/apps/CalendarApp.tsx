@@ -14,6 +14,7 @@ import {
 } from "date-fns";
 import { ChevronLeft, ChevronRight, Clock, Plus, Briefcase, Calendar as CalendarIcon, X } from "lucide-react";
 import type { CalendarEvent, VaultTask, ProjectFull } from "../../types";
+import { PLAUSIBLE_DEADLINE_WINDOW_MS } from "../../types";
 import { api } from "../../lib/api";
 
 type EntryColor = "primary" | "amber" | "slate";
@@ -40,10 +41,16 @@ const BORDER_CLASS: Record<EntryColor, string> = {
   slate: "border-slate",
 };
 
-/** Project deadlines are human-formatted ("Nov 15, 2026") rather than ISO — parse defensively. */
+/**
+ * Project deadlines are free text, not guaranteed ISO — parse defensively.
+ * A year-less string like "Nov 20" still produces a "valid" Date (JS
+ * defaults the missing year to 2001), which isNaN alone won't catch — it
+ * would silently place the marker decades away instead of failing safe.
+ */
 function parseDeadline(deadline: string): Date | null {
   const d = new Date(deadline);
-  return isNaN(d.getTime()) ? null : d;
+  if (isNaN(d.getTime()) || Math.abs(d.getTime() - Date.now()) >= PLAUSIBLE_DEADLINE_WINDOW_MS) return null;
+  return d;
 }
 
 /**

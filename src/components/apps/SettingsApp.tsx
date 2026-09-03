@@ -45,17 +45,19 @@ function UsageBar({
   cap: number | null;
   format?: (n: number) => string;
 }) {
+  const over = cap !== null && cap !== 0 && used > cap;
   const pct = cap === null || cap === 0 ? 0 : Math.min(100, (used / cap) * 100);
   return (
     <div>
       <div className="flex items-center justify-between mb-1.5">
         <span className="text-[12.5px] text-muted">{label}</span>
-        <span className="text-[12px] text-muted tabular-nums">
+        <span className={`text-[12px] tabular-nums ${over ? "text-amber font-medium" : "text-muted"}`}>
           {format(used)} {cap !== null ? `/ ${format(cap)}` : "· unlimited"}
+          {over ? " · over limit" : ""}
         </span>
       </div>
       <div className="h-1.5 rounded-full bg-chip overflow-hidden">
-        {cap !== null && <div className="h-full bg-primary rounded-full" style={{ width: `${pct}%` }} />}
+        {cap !== null && <div className={`h-full rounded-full ${over ? "bg-amber" : "bg-primary"}`} style={{ width: `${pct}%` }} />}
       </div>
     </div>
   );
@@ -100,6 +102,8 @@ export function SettingsApp({
 
   const [billing, setBilling] = useState<BillingStatus | null>(null);
   const [openingPortal, setOpeningPortal] = useState(false);
+  const [addonDraft, setAddonDraft] = useState(0);
+  const [savingAddon, setSavingAddon] = useState(false);
 
   useEffect(() => {
     api
@@ -120,7 +124,13 @@ export function SettingsApp({
       .catch((e) => console.error("Failed to load team", e))
       .finally(() => setLoadingTeam(false));
 
-    api.getBillingStatus().then(setBilling).catch((e) => console.error("Failed to load billing status", e));
+    api
+      .getBillingStatus()
+      .then((b) => {
+        setBilling(b);
+        setAddonDraft(b.storageAddonUnits);
+      })
+      .catch((e) => console.error("Failed to load billing status", e));
   }, []);
 
   const openBillingPortal = async () => {
@@ -131,6 +141,20 @@ export function SettingsApp({
     } catch (e) {
       showToast(e instanceof Error ? e.message : "Could not open billing portal");
       setOpeningPortal(false);
+    }
+  };
+
+  const saveStorageAddon = async () => {
+    setSavingAddon(true);
+    try {
+      const updated = await api.buyStorageAddon(addonDraft);
+      setBilling(updated);
+      setAddonDraft(updated.storageAddonUnits);
+      showToast("Storage updated");
+    } catch (e) {
+      showToast(e instanceof Error ? e.message : "Could not update storage");
+    } finally {
+      setSavingAddon(false);
     }
   };
 
@@ -313,6 +337,46 @@ export function SettingsApp({
               <UsageBar label="Active handovers" used={billing.usage.activeHandovers} cap={billing.limits.activeHandoverCap} />
             </div>
 
+            {me?.role === "owner" && billing.tier === "studio" && (
+              <div className="mt-5 pt-5 border-t border-line max-w-md">
+                <p className="text-[13px] text-ink font-medium mb-1">Extra storage</p>
+                <p className="text-[12px] text-muted mb-3">
+                  1TB base + {addonDraft} &times; 100GB = {formatBytes(1024 ** 4 + addonDraft * 100 * 1024 ** 3)} &middot; $
+                  {addonDraft * 15}/mo
+                </p>
+                <div className="flex items-center gap-3">
+                  <div className="flex items-center border border-line rounded-lg">
+                    <button
+                      type="button"
+                      onClick={() => setAddonDraft((n) => Math.max(0, n - 1))}
+                      disabled={savingAddon}
+                      className="px-3 py-2 text-ink disabled:opacity-50"
+                      aria-label="Remove one storage add-on unit"
+                    >
+                      &minus;
+                    </button>
+                    <span className="px-3 text-[13px] tabular-nums">{addonDraft}</span>
+                    <button
+                      type="button"
+                      onClick={() => setAddonDraft((n) => Math.min(50, n + 1))}
+                      disabled={savingAddon}
+                      className="px-3 py-2 text-ink disabled:opacity-50"
+                      aria-label="Add one storage add-on unit"
+                    >
+                      +
+                    </button>
+                  </div>
+                  <button
+                    onClick={saveStorageAddon}
+                    disabled={savingAddon || addonDraft === billing.storageAddonUnits}
+                    className="px-4 py-2 rounded-lg bg-primary hover:bg-primary/85 disabled:opacity-50 text-white transition-colors text-[13px] font-semibold"
+                  >
+                    {savingAddon ? "Updating…" : "Update storage"}
+                  </button>
+                </div>
+              </div>
+            )}
+
             {me?.role === "owner" && billing.tier === "trial" && (
               <div className="mt-6 pt-6 border-t border-line">
                 <p className="text-[13px] text-ink font-medium mb-4">
@@ -330,7 +394,8 @@ export function SettingsApp({
           <Users className="w-4 h-4" /> Team
         </h3>
         <p className="text-[12.5px] text-muted mb-5 max-w-lg">
-          Everyone below shares this studio's projects, files, and handovers.
+          Everyone below can sign in and shares this studio's projects, files, and handovers. Looking for a plain
+          contact list instead — no sign-in required? See Contacts in the sidebar.
         </p>
         {loadingTeam ? (
           <div className="text-[13px] text-muted">Loading…</div>

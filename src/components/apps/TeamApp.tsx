@@ -6,8 +6,15 @@ import { api } from "../../lib/api";
 
 const AVATAR_COLORS = ["#D85E25", "#2F9463", "#4C6B93", "#B8791E", "#9C27B0", "#E91E63"];
 
-/** Team window: a simple studio directory — no login/permissions, just a roster. */
-export function TeamApp({ showToast }: { showToast: (msg: string) => void }) {
+/** Contacts window: a simple studio directory — no login/permissions, just a contact list. */
+export function TeamApp({
+  showToast,
+  onOpenSettings,
+}: {
+  showToast: (msg: string) => void;
+  /** Deep-link to Settings' real Team section — where inviting someone with actual workspace access happens, distinct from this page. */
+  onOpenSettings?: () => void;
+}) {
   const [members, setMembers] = useState<TeamMember[]>([]);
   const [loading, setLoading] = useState(true);
   const [editing, setEditing] = useState<TeamMember | "new" | null>(null);
@@ -44,10 +51,10 @@ export function TeamApp({ showToast }: { showToast: (msg: string) => void }) {
       };
       if (editing === "new") {
         await api.createTeamMember(payload);
-        showToast("Added to the roster");
+        showToast("Added to contacts");
       } else if (editing) {
         await api.updateTeamMember(editing.id, payload);
-        showToast("Roster entry updated");
+        showToast("Contact updated");
       }
       setEditing(null);
       await refresh();
@@ -77,20 +84,31 @@ export function TeamApp({ showToast }: { showToast: (msg: string) => void }) {
 
   return (
     <div className="flex flex-col h-full text-ink w-full relative">
-      <div className="flex items-center justify-between mb-6">
-        <p className="text-muted text-[14px]">Your studio's roster.</p>
+      <div className="flex items-center justify-between mb-2">
+        <p className="text-muted text-[14px]">Your studio's contacts.</p>
         <button
           onClick={openNew}
           className="flex items-center gap-2 px-4 py-2 bg-primary hover:bg-primary/85 text-white transition-colors rounded-full text-[13px] font-medium"
         >
-          <Plus className="w-4 h-4" /> Add member
+          <Plus className="w-4 h-4" /> Add contact
         </button>
       </div>
+      <p className="text-[12.5px] text-muted mb-6">
+        A plain contact list — no sign-in, no workspace access. Looking to give someone real access to this
+        workspace?{" "}
+        {onOpenSettings ? (
+          <button onClick={onOpenSettings} className="text-ink underline underline-offset-2 hover:no-underline">
+            Invite them from Settings → Team
+          </button>
+        ) : (
+          "Invite them from Settings → Team."
+        )}
+      </p>
 
       {members.length === 0 ? (
         <div className="text-center py-16 border border-dashed border-line rounded-2xl">
-          <p className="text-[13px] text-ink/70 mb-1">No one on the roster yet</p>
-          <p className="text-[12.5px] text-muted">Add one to start building your roster.</p>
+          <p className="text-[13px] text-ink/70 mb-1">No contacts yet</p>
+          <p className="text-[12.5px] text-muted">Add one to start building your contact list.</p>
         </div>
       ) : (
         <div className="grid grid-cols-2 md:grid-cols-3 gap-3">
