@@ -22,6 +22,11 @@ import { createUser, createWorkspace, getUserByEmail, getUserById } from "../db.
 const SECRET = process.env.SESSION_SECRET || crypto.randomBytes(32).toString("hex");
 const COOKIE = "db_auth";
 
+// Secure requires HTTPS, which local dev (http://localhost) doesn't have —
+// gate on NODE_ENV like the rest of this codebase's production-only checks,
+// so the session cookie is never sent over plain HTTP once deployed.
+const SECURE_ATTR = process.env.NODE_ENV === "production" ? "; Secure" : "";
+
 export type { Session };
 
 function readCookie(req: Request, name: string): string | undefined {
@@ -43,11 +48,14 @@ function readCookie(req: Request, name: string): string | undefined {
  */
 export function setSessionCookie(res: Response, userId: string, workspaceId: string) {
   const value = signAppSession(userId, workspaceId, SECRET);
-  res.append("Set-Cookie", `${COOKIE}=${encodeURIComponent(value)}; Path=/; HttpOnly; SameSite=Lax; Max-Age=${SESSION_MAX_AGE_MS / 1000}`);
+  res.append(
+    "Set-Cookie",
+    `${COOKIE}=${encodeURIComponent(value)}; Path=/; HttpOnly; SameSite=Lax${SECURE_ATTR}; Max-Age=${SESSION_MAX_AGE_MS / 1000}`
+  );
 }
 
 function clearSessionCookie(res: Response) {
-  res.setHeader("Set-Cookie", `${COOKIE}=; Path=/; HttpOnly; SameSite=Lax; Max-Age=0`);
+  res.setHeader("Set-Cookie", `${COOKIE}=; Path=/; HttpOnly; SameSite=Lax${SECURE_ATTR}; Max-Age=0`);
 }
 
 export interface AuthedRequest extends Request {

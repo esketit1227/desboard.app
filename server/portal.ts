@@ -52,6 +52,8 @@ import {
 // Sessions are stateless HMAC cookies. Without PORTAL_SECRET in the env the
 // secret is per-process, so portal sessions reset on server restart.
 const SECRET = process.env.PORTAL_SECRET || crypto.randomBytes(32).toString("hex");
+// See server/auth.ts for why this is gated on NODE_ENV rather than always on.
+const SECURE_ATTR = process.env.NODE_ENV === "production" ? "; Secure" : "";
 
 const cookieName = (handoverId: string) => `dp_${handoverId}`;
 
@@ -69,7 +71,7 @@ function setSessionCookie(res: Response, handoverId: string) {
   const value = signSession(handoverId, SECRET);
   res.setHeader(
     "Set-Cookie",
-    `${cookieName(handoverId)}=${encodeURIComponent(value)}; Path=/; HttpOnly; SameSite=Lax; Max-Age=${7 * 24 * 3600}`
+    `${cookieName(handoverId)}=${encodeURIComponent(value)}; Path=/; HttpOnly; SameSite=Lax${SECURE_ATTR}; Max-Age=${7 * 24 * 3600}`
   );
   return value;
 }
@@ -461,8 +463,8 @@ export function createPortalRouter(): Router {
       `Size: ${file.size || "-"}\n` +
       `Status: ${file.status || "-"}\n` +
       `Tags: ${(file.tags || []).join(", ") || "-"}\n\n` +
-      `Note: This is a delivery note. In this build Desboard stores file metadata\n` +
-      `rather than the original binary, so the asset is represented by this summary.\n`;
+      `Note: This file's original content isn't available for download right now.\n` +
+      `Contact the studio if you need it re-sent.\n`;
     res.setHeader("Content-Disposition", `attachment; filename="${safeName}.txt"`);
     res.type("text/plain; charset=utf-8").send(body);
   });

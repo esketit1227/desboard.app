@@ -41,7 +41,11 @@ export async function sendEmail({ to, subject, html }: SendEmailParams): Promise
 
 /** A short, plain reminder — deliberately not trying to reproduce the studio's handover branding, since this is a nudge, not the deliverable itself. */
 export function reminderEmailHtml(params: { studioName: string; handoverTitle: string; portalUrl: string; note?: string }): string {
-  const esc = (s: string) => s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+  // Must also escape quotes: params.portalUrl (built from the request's Host
+  // header in server.ts) lands inside an href="..." attribute below, and an
+  // unescaped " could break out of it.
+  const esc = (s: string) =>
+    s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;").replace(/'/g, "&#39;");
   return `
     <div style="font-family: -apple-system, sans-serif; max-width: 480px; margin: 0 auto; color: #1d1d1f;">
       <p>Hi,</p>

@@ -45,6 +45,14 @@ import crypto from "crypto";
 const SECRET = process.env.OAUTH_STATE_SECRET || process.env.SESSION_SECRET || crypto.randomBytes(32).toString("hex");
 
 const STATE_COOKIE = "db_oauth_state";
+// See server/auth.ts for why this is gated on NODE_ENV rather than always on.
+const SECURE_ATTR = process.env.NODE_ENV === "production" ? "; Secure" : "";
+
+/** See server.ts's identical helper — never echo a raw exception (library/network internals) into a client-visible field. */
+function safeError(e: unknown, fallback: string): string {
+  console.error(fallback + ":", e);
+  return fallback;
+}
 
 function readCookie(req: Request, name: string): string | undefined {
   const header = req.headers.cookie;
@@ -116,7 +124,7 @@ async function ensureAccessToken(workspaceId: string, provider: OAuthProvider, r
     updateOAuthTokens(workspaceId, provider, data.access_token, expiresAt, data.refresh_token ?? null);
     return data.access_token;
   } catch (e: any) {
-    setOAuthError(workspaceId, provider, e?.message || "Token refresh failed — reconnect required.");
+    setOAuthError(workspaceId, provider, safeError(e, "Token refresh failed — reconnect required."));
     return null;
   }
 }
@@ -242,11 +250,11 @@ export function createOAuthRouter(): Router {
         );
     }
     const state = signOAuthState({ provider, workspaceId: session.workspaceId, userId: session.userId, returnTo: "/" }, SECRET);
-    res.setHeader("Set-Cookie", `${STATE_COOKIE}=${encodeURIComponent(state)}; Path=/; HttpOnly; SameSite=Lax; Max-Age=600`);
+    res.setHeader("Set-Cookie", `${STATE_COOKIE}=${encodeURIComponent(state)}; Path=/; HttpOnly; SameSite=Lax${SECURE_ATTR}; Max-Age=600`);
     res.redirect(authorizeUrl(provider, creds, state));
   });
 
-  router.get("/api/oauth/:provider/callback", async (req, res) => {
+  router.get("/api/oauth/:provider/callback", actionLimiter, async (req, res) => {
     const provider = req.params.provider;
     if (!isOAuthProvider(provider)) return res.status(404).send(oauthErrorPage("Unknown connection", "This provider isn't supported."));
 
@@ -255,7 +263,7 @@ export function createOAuthRouter(): Router {
     // The state travels both ways (query param round-tripped by the provider,
     // and our own cookie) so a forged callback can't be replayed cross-session.
     const state = queryState && queryState === cookieState ? verifyOAuthState(queryState, SECRET) : null;
-    res.setHeader("Set-Cookie", `${STATE_COOKIE}=; Path=/; HttpOnly; SameSite=Lax; Max-Age=0`);
+    res.setHeader("Set-Cookie", `${STATE_COOKIE}=; Path=/; HttpOnly; SameSite=Lax${SECURE_ATTR}; Max-Age=0`);
 
     if (!state || state.provider !== provider) {
       return res.status(400).send(oauthErrorPage("Connection failed", "This connection attempt couldn't be verified. Please try connecting again."));
@@ -294,7 +302,7 @@ export function createOAuthRouter(): Router {
       });
       res.redirect(`${state.returnTo}?oauth=${provider}_connected`);
     } catch (e: any) {
-      res.status(502).send(oauthErrorPage("Connection failed", e?.message || "Something went wrong finishing the connection. Please try again."));
+      res.status(502).send(oauthErrorPage("Connection failed", safeError(e, "Something went wrong finishing the connection. Please try again.")));
     }
   });
 
@@ -327,7 +335,7 @@ export function createOAuthRouter(): Router {
             : await browseDropbox(accessToken, folder);
       res.json(result);
     } catch (e: any) {
-      setOAuthError(session.workspaceId, provider, e?.message || "Couldn't list files.");
+      setOAuthError(session.workspaceId, provider, safeError(e, "Couldn't list files."));
       res.status(502).json({ error: "reconnect_required" });
     }
   });
@@ -385,7 +393,7 @@ export function createOAuthRouter(): Router {
       );
       res.status(201).json(created);
     } catch (e: any) {
-      res.status(502).json({ error: e?.message || "Import failed" });
+      res.status(502).json({ error: safeError(e, "Import failed") });
     }
   });
 

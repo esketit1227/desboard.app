@@ -20,6 +20,7 @@
  */
 import "dotenv/config";
 import express from "express";
+import helmet from "helmet";
 import path from "path";
 import { createServer as createViteServer } from "vite";
 import Anthropic from "@anthropic-ai/sdk";
@@ -211,6 +212,17 @@ function workspaceOf(req: AuthedRequest): string {
 }
 
 /**
+ * Logs the real error server-side (stack trace, SQL constraint detail, etc.
+ * never reach the client — e.g. a raw SQLite error naming a real column) and
+ * returns the safe, already-descriptive fallback for the response instead.
+ * Never echo e.message itself into an API response.
+ */
+function safeError(e: unknown, fallback: string): string {
+  console.error(fallback + ":", e);
+  return fallback;
+}
+
+/**
  * Shared storage-quota check for every site that writes file bytes (direct
  * upload, a new version, and server/oauth.ts's Drive/Dropbox/OneDrive
  * import) — computed from the base64 payload BEFORE anything is written, so
@@ -252,6 +264,56 @@ function folderNestingError(
 async function startServer() {
   const app = express();
   const PORT = Number(process.env.PORT) || 3000;
+
+  // Security headers on every response, via one global middleware (helmet).
+  // Two deliberate deviations from helmet's/CLAUDE.md's defaults, both
+  // required by real, working features elsewhere in this app rather than
+  // loosened out of convenience:
+  //   - script-src/style-src need 'unsafe-inline': the client portal
+  //     (src/lib/handoverPage.ts) is a hand-built HTML string with inline
+  //     <script>/<style> blocks, not a bundled app — there's no nonce
+  //     plumbing today. A future refactor to per-request nonces would let
+  //     this be tightened; not attempted here given the portal is this
+  //     app's most business-critical page and the blast radius of getting
+  //     a nonce refactor wrong is high. CSP's other directives (no remote
+  //     script/object sources, restricted connect-src) still apply.
+  //   - frameguard is SAMEORIGIN, not DENY: FileVaultApp/ProjectFilesPanel/
+  //     HandoverFileRow all embed this app's own /api/files/:id/content in
+  //     an <iframe> for in-app previews (see src/lib/filePreview.ts). DENY
+  //     blocks ALL framing, including same-origin, and would break that
+  //     working feature; SAMEORIGIN still blocks the actual clickjacking
+  //     threat (a third-party site framing this app).
+  app.use(
+    helmet({
+      contentSecurityPolicy: {
+        directives: {
+          defaultSrc: ["'self'"],
+          scriptSrc: ["'self'", "'unsafe-inline'"],
+          styleSrc: ["'self'", "'unsafe-inline'", "https://fonts.googleapis.com"],
+          fontSrc: ["'self'", "https://fonts.gstatic.com", "data:"],
+          imgSrc: ["'self'", "data:", "blob:"],
+          mediaSrc: ["'self'", "blob:"],
+          // Vite's dev-mode HMR client connects over a WebSocket on a
+          // separate port (a different origin, as far as CSP is concerned,
+          // even on localhost) — allowed only outside production, where the
+          // Vite middleware (and therefore this websocket) doesn't run at
+          // all, so this never widens the real deployed policy.
+          connectSrc: process.env.NODE_ENV === "production" ? ["'self'"] : ["'self'", "ws://localhost:*", "ws://127.0.0.1:*"],
+          objectSrc: ["'none'"],
+          baseUri: ["'self'"],
+          formAction: ["'self'"],
+          frameAncestors: ["'self'"],
+        },
+      },
+      frameguard: { action: "sameorigin" },
+      hsts: { maxAge: 31536000, includeSubDomains: true },
+      // helmet defaults to the stricter "no-referrer"; CLAUDE.md asks for
+      // this specific value, which still sends the origin (not full URL) to
+      // other same-origin and https destinations, needed for things like the
+      // OAuth/SSO provider redirects to see where the request came from.
+      referrerPolicy: { policy: "strict-origin-when-cross-origin" },
+    })
+  );
 
   // Stripe webhook signature verification needs the raw, unparsed request
   // body — it MUST be mounted before the global express.json() below, or by
@@ -343,7 +405,7 @@ async function startServer() {
       const created = createFile(file, workspaceId);
       res.status(201).json(created);
     } catch (e: any) {
-      res.status(400).json({ error: e.message || "Failed to create file" });
+      res.status(400).json({ error: safeError(e, "Failed to create file") });
     }
   });
 
@@ -475,7 +537,7 @@ async function startServer() {
       const created = createProject(req.body, workspaceOf(req));
       res.status(201).json(created);
     } catch (e: any) {
-      res.status(400).json({ error: e.message || "Failed to create project" });
+      res.status(400).json({ error: safeError(e, "Failed to create project") });
     }
   });
 
@@ -537,7 +599,7 @@ async function startServer() {
     try {
       res.json(updateSettings(req.body, workspaceOf(req)));
     } catch (e: any) {
-      res.status(400).json({ error: e.message || "Failed to save settings" });
+      res.status(400).json({ error: safeError(e, "Failed to save settings") });
     }
   });
 
@@ -546,7 +608,7 @@ async function startServer() {
       clearDemoData(workspaceOf(req));
       res.status(204).end();
     } catch (e: any) {
-      res.status(400).json({ error: e.message || "Failed to clear demo data" });
+      res.status(400).json({ error: safeError(e, "Failed to clear demo data") });
     }
   });
 
@@ -580,7 +642,7 @@ async function startServer() {
       );
       res.status(201).json(created);
     } catch (e: any) {
-      res.status(400).json({ error: e.message || "Failed to create task" });
+      res.status(400).json({ error: safeError(e, "Failed to create task") });
     }
   });
 
@@ -628,7 +690,7 @@ async function startServer() {
       );
       res.status(201).json(created);
     } catch (e: any) {
-      res.status(400).json({ error: e.message || "Failed to create event" });
+      res.status(400).json({ error: safeError(e, "Failed to create event") });
     }
   });
 
@@ -674,7 +736,7 @@ async function startServer() {
       );
       res.status(201).json(created);
     } catch (e: any) {
-      res.status(400).json({ error: e.message || "Failed to create team member" });
+      res.status(400).json({ error: safeError(e, "Failed to create team member") });
     }
   });
 
@@ -718,7 +780,7 @@ async function startServer() {
       );
       res.status(201).json(created);
     } catch (e: any) {
-      res.status(400).json({ error: e.message || "Failed to create conversation" });
+      res.status(400).json({ error: safeError(e, "Failed to create conversation") });
     }
   });
 
@@ -794,7 +856,7 @@ async function startServer() {
       }
       res.status(201).json(createHandover(req.body, workspaceId));
     } catch (e: any) {
-      res.status(400).json({ error: e.message || "Failed to create handover" });
+      res.status(400).json({ error: safeError(e, "Failed to create handover") });
     }
   });
 
@@ -1019,7 +1081,7 @@ async function startServer() {
       res.json({ text: extractText(message) });
     } catch (e: any) {
       console.error("[/api/chat] AI error:", e.message);
-      res.status(500).json({ error: e.message || "Failed to generate answer" });
+      res.status(500).json({ error: safeError(e, "Failed to generate answer") });
     }
   });
 
@@ -1094,7 +1156,7 @@ async function startServer() {
       return res.status(502).json({ error: "Could not parse AI response" });
     } catch (e: any) {
       console.error("[/api/analyze] AI error:", e.message);
-      res.status(500).json({ error: e.message || "Failed to analyze" });
+      res.status(500).json({ error: safeError(e, "Failed to analyze") });
     }
   });
 
@@ -1270,7 +1332,7 @@ async function startServer() {
     } catch (e: any) {
       if (!res.writableEnded) {
         const rateLimited = e?.status === 429;
-        send({ type: "error", message: rateLimited ? "rate_limited" : e?.message || "Assistant failed" });
+        send({ type: "error", message: rateLimited ? "rate_limited" : "Assistant failed" });
       }
       console.error("[/api/assistant] AI error:", e?.message);
     } finally {

@@ -33,6 +33,14 @@ import {
 
 const SECRET = process.env.OAUTH_STATE_SECRET || process.env.SESSION_SECRET || crypto.randomBytes(32).toString("hex");
 const STATE_COOKIE = "db_sso_state";
+// See server/auth.ts for why this is gated on NODE_ENV rather than always on.
+const SECURE_ATTR = process.env.NODE_ENV === "production" ? "; Secure" : "";
+
+/** See server.ts's identical helper — never echo a raw exception (library/network internals) into a client-visible page. */
+function safeError(e: unknown, fallback: string): string {
+  console.error(fallback + ":", e);
+  return fallback;
+}
 
 const PROVIDER_LABEL: Record<SsoProvider, string> = { google: "Google", microsoft: "Microsoft", apple: "Apple" };
 
@@ -191,7 +199,7 @@ export function createSsoRouter(): Router {
     // Apple's callback is a cross-site top-level POST — a SameSite=Lax cookie
     // (fine for Google/Microsoft's GET callback) is never sent on that, so
     // the CSRF check below would fail on every real Apple login without this.
-    const cookieAttrs = provider === "apple" ? "HttpOnly; Secure; SameSite=None" : "HttpOnly; SameSite=Lax";
+    const cookieAttrs = provider === "apple" ? "HttpOnly; Secure; SameSite=None" : `HttpOnly; SameSite=Lax${SECURE_ATTR}`;
     res.setHeader("Set-Cookie", `${STATE_COOKIE}=${encodeURIComponent(state)}; Path=/; ${cookieAttrs}; Max-Age=600`);
     res.redirect(authorizeUrl(provider, config.clientId, config.redirectUri, state, nonce));
   });
@@ -205,7 +213,7 @@ export function createSsoRouter(): Router {
     // Apple's response_mode=form_post delivers code/state in the body; Google/Microsoft use query params.
     const source: Record<string, unknown> = provider === "apple" ? req.body ?? {} : req.query;
     const cookieState = readCookie(req, STATE_COOKIE);
-    res.append("Set-Cookie", `${STATE_COOKIE}=; Path=/; HttpOnly; SameSite=Lax; Max-Age=0`);
+    res.append("Set-Cookie", `${STATE_COOKIE}=; Path=/; HttpOnly; SameSite=Lax${SECURE_ATTR}; Max-Age=0`);
 
     const queryState = typeof source.state === "string" ? source.state : undefined;
     const state = queryState && queryState === cookieState ? verifySsoState(queryState, SECRET) : null;
@@ -265,12 +273,12 @@ export function createSsoRouter(): Router {
       if (result.ok === false) return res.status(400).send(oauthErrorPage("Sign-in failed", result.message));
       res.redirect("/");
     } catch (e: any) {
-      res.status(502).send(oauthErrorPage("Sign-in failed", e?.message || "Something went wrong signing you in. Please try again."));
+      res.status(502).send(oauthErrorPage("Sign-in failed", safeError(e, "Something went wrong signing you in. Please try again.")));
     }
   };
 
-  router.get("/api/auth/sso/:provider/callback", handleCallback);
-  router.post("/api/auth/sso/:provider/callback", handleCallback);
+  router.get("/api/auth/sso/:provider/callback", limiter, handleCallback);
+  router.post("/api/auth/sso/:provider/callback", limiter, handleCallback);
 
   return router;
 }

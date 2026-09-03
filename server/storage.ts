@@ -53,11 +53,44 @@ export function readContentStream(fileId: string): fs.ReadStream {
  * play what it's already buffered from the start, and a seek to an
  * undownloaded point just silently fails and snaps back to 0.
  */
+
+/**
+ * `mime` here is whatever the uploader's browser claimed at upload time
+ * (server.ts's POST /api/files just trusts req.body.mimeType — there's no
+ * magic-byte sniffing) and this app has no separate origin to isolate
+ * user content on. Serving an attacker-labeled "text/html" or
+ * "image/svg+xml" (both can carry a <script>) inline, from this app's own
+ * origin, would execute with the viewer's ambient session — a real stored-
+ * XSS path. Only a fixed allowlist of formats that can't carry active
+ * content gets rendered inline; everything else is forced to download as
+ * a generic type instead, regardless of what was claimed at upload.
+ */
+const INLINE_SAFE_MIME = new Set([
+  "image/png",
+  "image/jpeg",
+  "image/gif",
+  "image/webp",
+  "image/avif",
+  "image/bmp",
+  "image/x-icon",
+  "video/mp4",
+  "video/webm",
+  "video/quicktime",
+  "video/x-m4v",
+  "audio/mpeg",
+  "audio/wav",
+  "audio/ogg",
+  "audio/mp4",
+  "audio/webm",
+  "application/pdf",
+]);
+
 function streamPathWithRange(req: Request, res: Response, filePath: string, mime: string): void {
   const total = fs.statSync(filePath).size;
+  const safe = INLINE_SAFE_MIME.has(mime);
   res.setHeader("Accept-Ranges", "bytes");
-  res.setHeader("Content-Type", mime);
-  res.setHeader("Content-Disposition", "inline");
+  res.setHeader("Content-Type", safe ? mime : "application/octet-stream");
+  res.setHeader("Content-Disposition", safe ? "inline" : "attachment");
 
   const range = req.headers.range;
   if (!range) {
